@@ -98,7 +98,7 @@ Description: Open vSwitch GRE-over-IPsec support
  1000V.
  .
  The ovs-monitor-ipsec script provides support for encrypting GRE
- tunnels with IPsec.
+ and VXLAN tunnels with IPsec.
 
 Package: openvswitch-pki
 Architecture: all

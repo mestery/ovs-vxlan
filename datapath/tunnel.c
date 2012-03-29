@@ -1000,7 +1000,7 @@ unlock:
 }
 
 static struct rtable *__find_route(const struct tnl_mutable_config *mutable,
-				   u8 ipproto, u8 tos)
+				   u8 ipproto, u8 tos, struct sk_buff *skb)
 {
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,39)
 	struct flowi fl = { .nl_u = { .ip4_u = {
@@ -1009,6 +1009,13 @@ static struct rtable *__find_route(const struct tnl_mutable_config *mutable,
 					.tos = tos } },
 			    .proto = ipproto };
 	struct rtable *rt;
+
+	if (skb) {
+		if (OVS_CB(skb)->tun_ipv4_dst)
+			fl.nl_u.ipv4_u.daddr = OVS_CB(skb)->tun_ipv4_dst;
+		if (OVS_CB(skb)->tun_ipv4_src)
+			fl.nl_u.ipv4_u.saddr = OVS_CB(skb)->tun_ipv4_src;
+	}
 
 	if (unlikely(ip_route_output_key(port_key_get_net(&mutable->key), &rt, &fl)))
 		return ERR_PTR(-EADDRNOTAVAIL);
@@ -1020,13 +1027,21 @@ static struct rtable *__find_route(const struct tnl_mutable_config *mutable,
 			     .flowi4_tos = tos,
 			     .flowi4_proto = ipproto };
 
+	if (skb) {
+		if (OVS_CB(skb)->tun_ipv4_dst)
+			fl.daddr = OVS_CB(skb)->tun_ipv4_dst;
+		if (OVS_CB(skb)->tun_ipv4_src)
+			fl.daddr = OVS_CB(skb)->tun_ipv4_src;
+	}
+
 	return ip_route_output_key(port_key_get_net(&mutable->key), &fl);
 #endif
 }
 
 static struct rtable *find_route(struct vport *vport,
 				 const struct tnl_mutable_config *mutable,
-				 u8 tos, struct tnl_cache **cache)
+				 u8 tos, struct tnl_cache **cache,
+				 struct sk_buff *skb)
 {
 	struct tnl_vport *tnl_vport = tnl_vport_priv(vport);
 	struct tnl_cache *cur_cache = rcu_dereference(tnl_vport->cache);
@@ -1041,7 +1056,7 @@ static struct rtable *find_route(struct vport *vport,
 	} else {
 		struct rtable *rt;
 
-		rt = __find_route(mutable, tnl_vport->tnl_ops->ipproto, tos);
+		rt = __find_route(mutable, tnl_vport->tnl_ops->ipproto, tos, skb);
 		if (IS_ERR(rt))
 			return NULL;
 
@@ -1222,7 +1237,7 @@ int ovs_tnl_send(struct vport *vport, struct sk_buff *skb)
 	tos = INET_ECN_encapsulate(tos, inner_tos);
 
 	/* Route lookup */
-	rt = find_route(vport, mutable, tos, &cache);
+	rt = find_route(vport, mutable, tos, &cache, skb);
 	if (unlikely(!rt))
 		goto error_free;
 	if (unlikely(!cache))
@@ -1438,7 +1453,7 @@ static int tnl_set_config(struct net *net, struct nlattr *options,
 		struct net_device *dev;
 		struct rtable *rt;
 
-		rt = __find_route(mutable, tnl_ops->ipproto, mutable->tos);
+		rt = __find_route(mutable, tnl_ops->ipproto, mutable->tos, NULL);
 		if (IS_ERR(rt))
 			return -EADDRNOTAVAIL;
 		dev = rt_dst(rt).dev;

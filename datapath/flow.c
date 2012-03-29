@@ -630,6 +630,12 @@ int ovs_flow_extract(struct sk_buff *skb, u16 in_port, struct sw_flow_key *key,
 
 	key->phy.priority = skb->priority;
 	key->phy.tun_id = OVS_CB(skb)->tun_id;
+	key->tunnel.tun_id = OVS_CB(skb)->tun_id;
+	key->tunnel.ipv4_src = OVS_CB(skb)->tun_ipv4_src;
+	key->tunnel.ipv4_dst = OVS_CB(skb)->tun_ipv4_dst;
+	key->tunnel.ipv4_tos = OVS_CB(skb)->tun_ipv4_tos;
+	key->tunnel.ipv4_ttl = OVS_CB(skb)->tun_ipv4_ttl;
+
 	key->phy.in_port = in_port;
 
 	skb_reset_mac_header(skb);
@@ -847,6 +853,7 @@ const int ovs_key_lens[OVS_KEY_ATTR_MAX + 1] = {
 
 	/* Not upstream. */
 	[OVS_KEY_ATTR_TUN_ID] = sizeof(__be64),
+	[OVS_KEY_ATTR_TUNNEL] = sizeof(struct ovs_key_tunnel),
 };
 
 static int ipv4_flow_from_nlattrs(struct sw_flow_key *swkey, int *key_len,
@@ -996,6 +1003,7 @@ int ovs_flow_from_nlattrs(struct sw_flow_key *swkey, int *key_lenp,
 {
 	const struct nlattr *a[OVS_KEY_ATTR_MAX + 1];
 	const struct ovs_key_ethernet *eth_key;
+	const struct ovs_key_tunnel *tun_key;
 	int key_len;
 	u64 attrs;
 	int err;
@@ -1025,6 +1033,16 @@ int ovs_flow_from_nlattrs(struct sw_flow_key *swkey, int *key_lenp,
 	if (attrs & (1ULL << OVS_KEY_ATTR_TUN_ID)) {
 		swkey->phy.tun_id = nla_get_be64(a[OVS_KEY_ATTR_TUN_ID]);
 		attrs &= ~(1ULL << OVS_KEY_ATTR_TUN_ID);
+	}
+
+	if ((attrs & (1ULL << OVS_KEY_ATTR_TUNNEL))) {
+		attrs &= ~(1ULL << OVS_KEY_ATTR_TUNNEL);
+		tun_key = nla_data(a[OVS_KEY_ATTR_TUNNEL]);
+		swkey->tunnel.tun_id = ntohl(tun_key->tun_id);
+		swkey->tunnel.ipv4_src = tun_key->ipv4_src;
+		swkey->tunnel.ipv4_dst = tun_key->ipv4_dst;
+		swkey->tunnel.ipv4_tos = tun_key->ipv4_tos;
+		swkey->tunnel.ipv4_ttl = tun_key->ipv4_ttl;
 	}
 
 	/* Data attributes. */
@@ -1166,6 +1184,7 @@ int ovs_flow_metadata_from_nlattrs(u32 *priority, u16 *in_port, __be64 *tun_id,
 				   const struct nlattr *attr)
 {
 	const struct nlattr *nla;
+	const struct ovs_key_tunnel *tun_key;
 	int rem;
 
 	*in_port = DP_MAX_PORTS;
@@ -1186,6 +1205,11 @@ int ovs_flow_metadata_from_nlattrs(u32 *priority, u16 *in_port, __be64 *tun_id,
 
 			case OVS_KEY_ATTR_TUN_ID:
 				*tun_id = nla_get_be64(nla);
+				break;
+
+			case OVS_KEY_ATTR_TUNNEL:
+				tun_key = nla_data(nla);
+				*tun_id = ntohl(tun_key->tun_id);
 				break;
 
 			case OVS_KEY_ATTR_IN_PORT:
@@ -1236,6 +1260,20 @@ int ovs_flow_to_nlattrs(const struct sw_flow_key *swkey, struct sk_buff *skb)
 		goto unencap;
 
 	NLA_PUT_BE16(skb, OVS_KEY_ATTR_ETHERTYPE, swkey->eth.type);
+
+	if (swkey->tunnel.tun_id != cpu_to_be64(0)) {
+		struct ovs_key_tunnel *tun_key;
+
+		nla = nla_reserve(skb, OVS_KEY_ATTR_TUNNEL, sizeof(*tun_key));
+		if (!nla)
+			goto nla_put_failure;
+		tun_key = nla_data(nla);
+		tun_key->tun_id = swkey->tunnel.tun_id;
+		tun_key->ipv4_src = swkey->ipv4.tp.src;
+		tun_key->ipv4_dst = swkey->ipv4.tp.dst;
+		tun_key->ipv4_tos = swkey->ip.tos;
+		tun_key->ipv4_ttl = swkey->ip.ttl;
+	}
 
 	if (swkey->eth.type == htons(ETH_P_IP)) {
 		struct ovs_key_ipv4 *ipv4_key;

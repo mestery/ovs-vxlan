@@ -108,6 +108,10 @@ struct datapath {
 struct ovs_skb_cb {
 	struct sw_flow		*flow;
 	__be64			tun_id;
+	__be32			tun_ipv4_src;       /* Outer tunnel src IP */
+	__be32			tun_ipv4_dst;       /* Outer tunnel dst IP */
+	u8			tun_ipv4_tos;       /* Outer tunnel IP TOS */
+	u8			tun_ipv4_ttl;       /* Outer tunnel IP TTL */
 #ifdef NEED_CSUM_NORMALIZE
 	enum csum_type		ip_summed;
 	u16			csum_start;

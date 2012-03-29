@@ -14,9 +14,10 @@
 # limitations under the License.
 
 
-# A daemon to monitor attempts to create GRE-over-IPsec tunnels.
-# Uses racoon and setkey to support the configuration.  Assumes that
-# OVS has complete control over IPsec configuration for the box.
+# A daemon to monitor attempts to create tunnels over IPsec.
+# Racoon and setkey are used to support the configuration.  It is
+# assumed that OVS has complete control over IPsec configuration for
+# the box.
 
 # xxx To-do:
 #  - Doesn't actually check that Interface is connected to bridge
@@ -43,6 +44,10 @@ import ovs.vlog
 vlog = ovs.vlog.Vlog("ovs-monitor-ipsec")
 root_prefix = ''                # Prefix for absolute file names, for testing.
 SETKEY = "/usr/sbin/setkey"
+# UDP ports used for VXLAN.  The source port is only fixed for
+# VXLAN-over-IPsec traffic.
+VXLAN_DST_PORT = 4563
+VXLAN_SRC_PORT = 4564
 exiting = False
 
 
@@ -50,6 +55,7 @@ def unixctl_exit(conn, unused_argv, unused_aux):
     global exiting
     exiting = True
     conn.reply(None)
+=======
 
 
 # Class to configure the racoon daemon, which handles IKE negotiation
@@ -256,13 +262,13 @@ path certificate "%s";
 
 # Class to configure IPsec on a system using racoon for IKE and setkey
 # for maintaining the Security Association Database (SAD) and Security
-# Policy Database (SPD).  Only policies for GRE are supported.
+# Policy Database (SPD).  Only policies for GRE and VXLAN are supported.
 class IPsec:
     def __init__(self):
         self.sad_flush()
         self.spd_flush()
         self.racoon = Racoon()
-        self.entries = []
+        self.entries = {}
 
     def call_setkey(self, cmds):
         try:
@@ -322,26 +328,42 @@ class IPsec:
         self.call_setkey("spdflush;\n")
 
     def spd_add(self, local_ip, remote_ip):
-        cmds = ("spdadd %s %s gre -P out ipsec esp/transport//require;\n" %
-                    (local_ip, remote_ip))
-        cmds += ("spdadd %s %s gre -P in ipsec esp/transport//require;\n" %
-                    (remote_ip, local_ip))
+        tunnel_type = self.entries[remote_ip]
+        if tunnel_type == "vxlan":
+            cmds = ("spdadd %s[%s] %s[%s] udp -P out ipsec esp/transport//require;\n"
+                        % (local_ip, VXLAN_SRC_PORT, remote_ip, VXLAN_DST_PORT))
+            cmds += ("spdadd %s[%s] %s[%s] udp -P in ipsec esp/transport//require;\n"
+                        % (remote_ip, VXLAN_DST_PORT, local_ip, VXLAN_SRC_PORT))
+        else:
+            cmds = ("spdadd %s %s gre -P out ipsec esp/transport//require;\n" %
+                        (local_ip, remote_ip))
+            cmds += ("spdadd %s %s gre -P in ipsec esp/transport//require;\n" %
+                        (remote_ip, local_ip))
         self.call_setkey(cmds)
 
     def spd_del(self, local_ip, remote_ip):
-        cmds = "spddelete %s %s gre -P out;\n" % (local_ip, remote_ip)
-        cmds += "spddelete %s %s gre -P in;\n" % (remote_ip, local_ip)
+        tunnel_type = self.entries[remote_ip]
+        if tunnel_type == "vxlan":
+            cmds = ("spddelete %s %s udp -P out;\n" % (local_ip, remote_ip))
+            cmds += ("spddelete %s %s udp -P in;\n" % (remote_ip, local_ip))
+        else:
+            cmds = "spddelete %s %s gre -P out;\n" % (local_ip, remote_ip)
+            cmds += "spddelete %s %s gre -P in;\n" % (remote_ip, local_ip)
         self.call_setkey(cmds)
 
     def add_entry(self, local_ip, remote_ip, vals):
+        tunnel_type = vals["tunnel_type"]
+        if tunnel_type not in ("gre", "vxlan"):
+            raise error.Error("unknown tunnel type: %s" % tunnel_type)
+
         if remote_ip in self.entries:
             raise error.Error("host %s already configured for ipsec"
                               % remote_ip)
 
         self.racoon.add_entry(remote_ip, vals)
-        self.spd_add(local_ip, remote_ip)
 
-        self.entries.append(remote_ip)
+        self.entries[remote_ip] = tunnel_type
+        self.spd_add(local_ip, remote_ip)
 
     def del_entry(self, local_ip, remote_ip):
         if remote_ip in self.entries:
@@ -349,7 +371,7 @@ class IPsec:
             self.spd_del(local_ip, remote_ip)
             self.sad_del(local_ip, remote_ip)
 
-            self.entries.remove(remote_ip)
+            del self.entries[remote_ip]
 
 
 def update_ipsec(ipsec, interfaces, new_interfaces):
@@ -438,6 +460,7 @@ def main():
         new_interfaces = {}
         for rec in idl.tables["Interface"].rows.itervalues():
             if rec.type == "ipsec_gre":
+<<<<<<< HEAD
                 name = rec.name
                 options = rec.options
                 peer_cert_name = "ovs-%s.pem" % (options.get("remote_ip"))
@@ -458,18 +481,45 @@ def main():
                 elif not entry["peer_cert"] and not entry["psk"]:
                     vlog.warn("no 'peer_cert' or 'psk' defined for %s" % name)
                     continue
+=======
+                tunnel_type = "gre"
+            elif rec.type == "ipsec_vxlan":
+                tunnel_type = "vxlan"
+            else:
+                continue
 
-                # The "use_ssl_cert" option is deprecated and will
-                # likely go away in the near future.
-                if entry["use_ssl_cert"] == "true":
-                    if not ssl_cert:
-                        vlog.warn("no valid SSL entry for %s" % name)
-                        continue
+            name = rec.name
+            options = rec.options
+            entry = {
+                "remote_ip": options.get("remote_ip"),
+                "local_ip": options.get("local_ip", "0.0.0.0/0"),
+                "certificate": options.get("certificate"),
+                "private_key": options.get("private_key"),
+                "use_ssl_cert": options.get("use_ssl_cert"),
+                "peer_cert": options.get("peer_cert"),
+                "psk": options.get("psk"),
+                "tunnel_type": tunnel_type }
 
-                    entry["certificate"] = ssl_cert[0]
-                    entry["private_key"] = ssl_cert[1]
+            if entry["peer_cert"] and entry["psk"]:
+                vlog.warn("both 'peer_cert' and 'psk' defined for %s"
+                        % name)
+                continue
+            elif not entry["peer_cert"] and not entry["psk"]:
+                vlog.warn("no 'peer_cert' or 'psk' defined for %s" % name)
+                continue
+>>>>>>> bd95b5d... vxlan: Add support for VXLAN-over-IPsec.
 
-                new_interfaces[name] = entry
+            # The "use_ssl_cert" option is deprecated and will
+            # likely go away in the near future.
+            if entry["use_ssl_cert"] == "true":
+                if not ssl_cert:
+                    vlog.warn("no valid SSL entry for %s" % name)
+                    continue
+
+                entry["certificate"] = ssl_cert[0]
+                entry["private_key"] = ssl_cert[1]
+
+            new_interfaces[name] = entry
 
         if interfaces != new_interfaces:
             update_ipsec(ipsec, interfaces, new_interfaces)

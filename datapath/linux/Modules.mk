@@ -66,6 +66,7 @@ openvswitch_headers += \
 	linux/compat/include/net/route.h \
 	linux/compat/include/net/sock.h \
 	linux/compat/include/net/netns/generic.h \
+	linux/compat/include/net/xfrm.h \
 	linux/compat/genetlink.inc
 
 # always distribute brcompat source regardless of local build configuration

@@ -1574,9 +1574,12 @@ OFP_ASSERT(sizeof(struct nx_action_output_reg) == 24);
 
 /* Tunnel ID.
  *
- * For a packet received via GRE tunnel including a (32-bit) key, the key is
- * stored in the low 32-bits and the high bits are zeroed.  For other packets,
- * the value is 0.
+ * The key, for a packet received via a keyed tunnel.  If the key is less than
+ * 64 bits wide, this field holds the in its low-order bits and higher bits are
+ * zeroed.  If the key is more than 64 bits wide, this field contains the 64
+ * lowest-order bits.
+ *
+ * All zero bits, for packets not received via a keyed tunnel.
  *
  * Prereqs: None.
  *

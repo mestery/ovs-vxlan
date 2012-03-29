@@ -136,11 +136,27 @@ netdev_vport_get_vport_type(const struct netdev *netdev)
             : OVS_VPORT_TYPE_UNSPEC);
 }
 
+static const char *
+get_maybe_ipsec_tunnel_type(const struct dpif_linux_vport *vport,
+                            const char *plain_type, const char *ipsec_type)
+{
+    struct nlattr *a[OVS_TUNNEL_ATTR_MAX + 1];
+    uint32_t flags;
+
+    if (tnl_port_config_from_nlattr(vport->options, vport->options_len, a)) {
+        VLOG_WARN_RL(&rl, "dp%d: cannot parse options for port `%s' (type %u)",
+                     vport->dp_ifindex, vport->name,
+                     (unsigned int) vport->type);
+        return "unknown";
+    }
+
+    flags = nl_attr_get_u32(a[OVS_TUNNEL_ATTR_FLAGS]);
+    return flags & TNL_F_IPSEC ? ipsec_type : plain_type;
+}
+
 const char *
 netdev_vport_get_netdev_type(const struct dpif_linux_vport *vport)
 {
-    struct nlattr *a[OVS_TUNNEL_ATTR_MAX + 1];
-
     switch (vport->type) {
     case OVS_VPORT_TYPE_UNSPEC:
         break;
@@ -155,15 +171,13 @@ netdev_vport_get_netdev_type(const struct dpif_linux_vport *vport)
         return "patch";
 
     case OVS_VPORT_TYPE_GRE:
-        if (tnl_port_config_from_nlattr(vport->options, vport->options_len,
-                                        a)) {
-            break;
-        }
-        return (nl_attr_get_u32(a[OVS_TUNNEL_ATTR_FLAGS]) & TNL_F_IPSEC
-                ? "ipsec_gre" : "gre");
+        return get_maybe_ipsec_tunnel_type(vport, "gre", "ipsec_gre");
 
     case OVS_VPORT_TYPE_CAPWAP:
         return "capwap";
+
+    case OVS_VPORT_TYPE_VXLAN:
+        return get_maybe_ipsec_tunnel_type(vport, "vxlan", "ipsec_vxlan");
 
     case __OVS_VPORT_TYPE_MAX:
         break;
@@ -574,20 +588,19 @@ static int
 parse_tunnel_config(const char *name, const char *type,
                     const struct shash *args, struct ofpbuf *options)
 {
-    bool is_gre = false;
-    bool is_ipsec = false;
+    bool supports_csum;
+    bool is_ipsec;
     struct shash_node *node;
     bool ipsec_mech_set = false;
     ovs_be32 daddr = htonl(0);
     ovs_be32 saddr = htonl(0);
     uint32_t flags;
 
+    supports_csum = !strcmp(type, "gre") || !strcmp(type, "ipsec_gre");
+    is_ipsec = !strncmp(type, "ipsec_", 6);
+
     flags = TNL_F_DF_DEFAULT | TNL_F_PMTUD | TNL_F_HDR_CACHE;
-    if (!strcmp(type, "gre")) {
-        is_gre = true;
-    } else if (!strcmp(type, "ipsec_gre")) {
-        is_gre = true;
-        is_ipsec = true;
+    if (is_ipsec) {
         flags |= TNL_F_IPSEC;
         flags &= ~TNL_F_HDR_CACHE;
     }
@@ -619,7 +632,7 @@ parse_tunnel_config(const char *name, const char *type,
             } else {
                 nl_msg_put_u8(options, OVS_TUNNEL_ATTR_TTL, atoi(node->data));
             }
-        } else if (!strcmp(node->name, "csum") && is_gre) {
+        } else if (!strcmp(node->name, "csum") && supports_csum) {
             if (!strcmp(node->data, "true")) {
                 flags |= TNL_F_CSUM;
             }
@@ -961,6 +974,14 @@ netdev_vport_register(void)
 
         { OVS_VPORT_TYPE_CAPWAP,
           { "capwap", VPORT_FUNCTIONS(netdev_vport_get_drv_info) },
+          parse_tunnel_config, unparse_tunnel_config },
+
+        { OVS_VPORT_TYPE_VXLAN,
+          { "vxlan", VPORT_FUNCTIONS(netdev_vport_get_drv_info) },
+          parse_tunnel_config, unparse_tunnel_config },
+
+        { OVS_VPORT_TYPE_VXLAN,
+          { "vxlan_ipsec", VPORT_FUNCTIONS(netdev_vport_get_drv_info) },
           parse_tunnel_config, unparse_tunnel_config },
 
         { OVS_VPORT_TYPE_PATCH,

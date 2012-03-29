@@ -107,6 +107,7 @@ ovs_key_attr_to_string(enum ovs_key_attr attr)
     case OVS_KEY_ATTR_ARP: return "arp";
     case OVS_KEY_ATTR_ND: return "nd";
     case OVS_KEY_ATTR_TUN_ID: return "tun_id";
+    case OVS_KEY_ATTR_TUNNEL: return "tunnel";
 
     case __OVS_KEY_ATTR_MAX:
     default:
@@ -511,6 +512,7 @@ odp_flow_key_attr_len(uint16_t type)
     case OVS_KEY_ATTR_ENCAP: return -2;
     case OVS_KEY_ATTR_PRIORITY: return 4;
     case OVS_KEY_ATTR_TUN_ID: return 8;
+    case OVS_KEY_ATTR_TUNNEL: return sizeof(struct ovs_key_tunnel);
     case OVS_KEY_ATTR_IN_PORT: return 4;
     case OVS_KEY_ATTR_ETHERNET: return sizeof(struct ovs_key_ethernet);
     case OVS_KEY_ATTR_VLAN: return sizeof(ovs_be16);
@@ -577,6 +579,7 @@ format_odp_key_attr(const struct nlattr *a, struct ds *ds)
     const struct ovs_key_icmpv6 *icmpv6_key;
     const struct ovs_key_arp *arp_key;
     const struct ovs_key_nd *nd_key;
+    const struct ovs_key_tunnel *tun_key;
     enum ovs_key_attr attr = nl_attr_type(a);
     int expected_len;
 
@@ -605,6 +608,16 @@ format_odp_key_attr(const struct nlattr *a, struct ds *ds)
 
     case OVS_KEY_ATTR_TUN_ID:
         ds_put_format(ds, "(%#"PRIx64")", ntohll(nl_attr_get_be64(a)));
+        break;
+
+    case OVS_KEY_ATTR_TUNNEL:
+        tun_key = nl_attr_get(a);
+        ds_put_format(ds, "(src="IP_FMT",dst="IP_FMT",tos=%#"PRIx8\
+                      "ttl=%"PRIu8",tun_id=%#"PRIx64,
+                      IP_ARGS(&tun_key->ipv4_src),
+                      IP_ARGS(&tun_key->ipv4_dst),
+                      tun_key->ipv4_ttl, tun_key->ipv4_tos,
+                      ntohll(tun_key->tun_id));
         break;
 
     case OVS_KEY_ATTR_IN_PORT:
@@ -816,6 +829,32 @@ parse_odp_key_attr(const char *s, const struct shash *port_names,
                    tun_id_s, &n) > 0 && n > 0) {
             uint64_t tun_id = strtoull(tun_id_s, NULL, 0);
             nl_msg_put_be64(key, OVS_KEY_ATTR_TUN_ID, htonll(tun_id));
+            return n;
+        }
+    }
+
+    {
+        char tun_id_s[32];
+        ovs_be32 ipv4_src;
+        ovs_be32 ipv4_dst;
+        int ipv4_tos;
+        int ipv4_ttl;
+        int n = -1;
+
+        if (sscanf(s, "ipv4(src="IP_SCAN_FMT",dst="IP_SCAN_FMT","
+                   "tos=%i,ttl=%i,tun_id(%31[x0123456789abcdefABCDEF])%n",
+                   IP_SCAN_ARGS(&ipv4_src), IP_SCAN_ARGS(&ipv4_dst),
+                   &ipv4_tos, &ipv4_ttl, tun_id_s, &n) > 0
+            && n > 0) {
+            struct ovs_key_tunnel tun_key;
+
+            tun_key.tun_id = strtoull(tun_id_s, NULL, 0);
+            tun_key.ipv4_src = ipv4_src;
+            tun_key.ipv4_dst = ipv4_dst;
+            tun_key.ipv4_tos = ipv4_tos;
+            tun_key.ipv4_ttl = ipv4_ttl;
+            nl_msg_put_unspec(key, OVS_KEY_ATTR_TUNNEL,
+                              &tun_key, sizeof tun_key);
             return n;
         }
     }
@@ -1167,7 +1206,19 @@ odp_flow_key_from_flow(struct ofpbuf *buf, const struct flow *flow)
     }
 
     if (flow->tun_id != htonll(0)) {
-        nl_msg_put_be64(buf, OVS_KEY_ATTR_TUN_ID, flow->tun_id);
+        struct ovs_key_tunnel *tun_key;
+
+        if (flow->nw_src != 0 && flow->nw_dst != 0) {
+            tun_key = nl_msg_put_unspec_uninit(buf, OVS_KEY_ATTR_TUNNEL,
+                                                sizeof *tun_key);
+            tun_key->tun_id = flow->tun_id;
+            tun_key->ipv4_src = flow->nw_src;
+            tun_key->ipv4_dst = flow->nw_dst;
+            tun_key->ipv4_ttl = flow->nw_tos;
+            tun_key->ipv4_tos = flow->nw_ttl;
+        } else {
+            nl_msg_put_be64(buf, OVS_KEY_ATTR_TUN_ID, flow->tun_id);
+        }
     }
 
     if (flow->in_port != OFPP_NONE) {
@@ -1764,6 +1815,30 @@ commit_set_tun_id_action(const struct flow *flow, struct flow *base,
 }
 
 static void
+commit_set_tunnel_action(const struct flow *flow, struct flow *base,
+                         struct ofpbuf *odp_actions)
+{
+    struct ovs_key_tunnel tun_key;
+
+    if (base->nw_src == flow->nw_src &&
+        base->nw_dst == flow->nw_dst &&
+        base->nw_tos == flow->nw_tos &&
+        base->nw_ttl == flow->nw_ttl &&
+        base->tun_id == flow->tun_id) {
+        return;
+    }
+
+    tun_key.ipv4_src = base->nw_src = flow->nw_src;
+    tun_key.ipv4_dst = base->nw_dst = flow->nw_dst;
+    tun_key.ipv4_tos = base->nw_tos = flow->nw_tos;
+    tun_key.ipv4_ttl = base->nw_ttl = flow->nw_ttl;
+    tun_key.tun_id = base->tun_id;
+
+    commit_set_action(odp_actions, OVS_KEY_ATTR_TUNNEL,
+                      &tun_key, sizeof(tun_key));
+}
+
+static void
 commit_set_ether_addr_action(const struct flow *flow, struct flow *base,
                              struct ofpbuf *odp_actions)
 {
@@ -1932,6 +2007,7 @@ commit_odp_actions(const struct flow *flow, struct flow *base,
                    struct ofpbuf *odp_actions)
 {
     commit_set_tun_id_action(flow, base, odp_actions);
+    commit_set_tunnel_action(flow, base, odp_actions);
     commit_set_ether_addr_action(flow, base, odp_actions);
     commit_vlan_action(flow, base, odp_actions);
     commit_set_nw_action(flow, base, odp_actions);

@@ -580,6 +580,15 @@ static int validate_set(const struct nlattr *a,
 	case OVS_KEY_ATTR_ETHERNET:
 		break;
 
+	case OVS_KEY_ATTR_TUNNEL:
+		if (flow_key->eth.type != htons(ETH_P_IP))
+			return -EINVAL;
+
+		if (!flow_key->tunnel.ipv4_src || !flow_key->tunnel.ipv4_dst)
+			return -EINVAL;
+
+		break;
+
 	case OVS_KEY_ATTR_IPV4:
 		if (flow_key->eth.type != htons(ETH_P_IP))
 			return -EINVAL;

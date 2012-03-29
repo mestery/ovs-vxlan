@@ -1152,8 +1152,7 @@
           <dt><code>gre</code></dt>
           <dd>
             An Ethernet over RFC 2890 Generic Routing Encapsulation over IPv4
-            tunnel.  See <ref group="Tunnel Options"/> for information on
-            configuring GRE tunnels.
+            tunnel.
           </dd>
 
           <dt><code>ipsec_gre</code></dt>
@@ -1172,6 +1171,32 @@
             with the Linux kernel datapath with kernel version 2.6.26 or later.
           </dd>
 
+          <dt><code>vxlan</code></dt>
+          <dd>
+	    <p>
+	      An Ethernet tunnel over the experimental, UDP-based VXLAN
+	      protocol described at
+	      <code>http://tools.ietf.org/html/draft-mahalingam-dutt-dcops-vxlan-00</code>.
+	      VXLAN is currently supported only with the Linux kernel datapath
+	      with kernel version 2.6.26 or later.
+	    </p>
+	    <p>
+	      As an experimental protocol, VXLAN has no officially assigned UDP
+	      port.  Open vSwitch currently uses UDP destination port 4563.
+	      The source port used for VXLAN traffic varies on a per-flow basis
+	      between 32768 and 65535 to allow load balancing.
+	    </p>
+          </dd>
+
+	  <dt><code>ipsec_vxlan</code></dt>
+	  <dd>
+	    VXLAN over an IPSEC tunnel.  As an exception to the usual rule that
+	    only one tunnel with the same matching criteria is allowed at a
+	    time, it is possible to have one <code>vxlan</code> tunnel and one
+	    <code>ipsec_vxlan</code> tunnel at the same time that are otherwise
+	    equivalent.
+	  </dd>
+
           <dt><code>patch</code></dt>
           <dd>
             A pair of virtual devices that act as a patch cable.
@@ -1186,7 +1211,8 @@
     <group title="Tunnel Options">
       <p>
         These options apply to interfaces with <ref column="type"/> of
-        <code>gre</code>, <code>ipsec_gre</code>, and <code>capwap</code>.
+        <code>gre</code>, <code>ipsec_gre</code>, <code>capwap</code>,
+        <code>vxlan</code>, and <code>vxlan_ipsec</code>.
       </p>
 
       <p>
@@ -1229,8 +1255,9 @@
             key="in_key"/> at all.
           </li>
           <li>
-            A positive 32-bit (for GRE) or 64-bit (for CAPWAP) number.  The
-            tunnel receives only packets with the specified key.
+            A positive 24-bit (for VXLAN), 32-bit (for GRE) or 64-bit (for
+            CAPWAP) number.  The tunnel receives only packets with the
+            specified key.
           </li>
           <li>
             The word <code>flow</code>.  The tunnel accepts packets with any
@@ -1255,8 +1282,9 @@
             key="out_key"/> at all.
           </li>
           <li>
-            A positive 32-bit (for GRE) or 64-bit (for CAPWAP) number.  Packets
-            sent through the tunnel will have the specified key.
+            A positive 24-bit (for VXLAN), 32-bit (for GRE) or 64-bit (for
+            CAPWAP) number.  Packets sent through the tunnel will have the
+            specified key.
           </li>
           <li>
             The word <code>flow</code>.  Packets sent through the tunnel will
@@ -1314,9 +1342,10 @@
         enabled; set to <code>false</code> to disable.
       </column>
 
-      <group title="Tunnel Options: gre only">
+      <group title="Tunnel Options: gre and vxlan only">
         <p>
-          Only <code>gre</code> interfaces support these options.
+          Only <code>gre</code> and <code>vxlan</code> interfaces support these
+          options.
         </p>
 
         <column name="options" key="header_cache" type='{"type": "boolean"}'>
@@ -1358,10 +1387,18 @@
         </column>
       </group>
 
-      <group title="Tunnel Options: ipsec_gre only">
+      <group title="Tunnel Options: ipsec_gre and ipsec_vxlan only">
         <p>
-          Only <code>ipsec_gre</code> interfaces support these options.
+          Only <code>ipsec_gre</code> and <code>ipsec_vxlan</code> interfaces
+          support these options.
         </p>
+
+	<p>
+	  These options are implemented through a separate daemon named
+	  <code>ovs-monitor-ipsec</code> that so far has only been ported to
+	  and packaged for Debian (including derivative distributions such as
+	  Ubuntu).
+	</p>
 
         <column name="options" key="peer_cert">
           Required for certificate authentication.  A string containing the

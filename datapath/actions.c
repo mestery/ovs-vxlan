@@ -35,6 +35,7 @@
 #include "datapath.h"
 #include "vlan.h"
 #include "vport.h"
+#include "vport-vxlan.h"
 
 static int do_execute_actions(struct datapath *dp, struct sk_buff *skb,
 			const struct nlattr *attr, int len, bool keep_skb);
@@ -198,6 +199,14 @@ static int set_ipv4(struct sk_buff *skb, const struct ovs_key_ipv4 *ipv4_key)
 	return 0;
 }
 
+static void set_tunnel(struct sk_buff *skb, const struct ovs_key_tunnel *tun_key)
+{
+	OVS_CB(skb)->tun_ipv4_src = tun_key->ipv4_src;
+	OVS_CB(skb)->tun_ipv4_dst = tun_key->ipv4_dst;
+	OVS_CB(skb)->tun_ipv4_tos = tun_key->ipv4_tos;
+	OVS_CB(skb)->tun_ipv4_ttl = tun_key->ipv4_ttl;
+}
+
 /* Must follow make_writable() since that can move the skb data. */
 static void set_tp_port(struct sk_buff *skb, __be16 *port,
 			 __be16 new_port, __sum16 *check)
@@ -346,6 +355,10 @@ static int execute_set_action(struct sk_buff *skb,
 		OVS_CB(skb)->tun_id = nla_get_be64(nested_attr);
 		break;
 
+	case OVS_KEY_ATTR_TUNNEL:
+		set_tunnel(skb, nla_data(nested_attr));
+		break;
+
 	case OVS_KEY_ATTR_ETHERNET:
 		err = set_eth_addr(skb, nla_data(nested_attr));
 		break;
@@ -470,6 +483,10 @@ int ovs_execute_actions(struct datapath *dp, struct sk_buff *skb)
 	}
 
 	OVS_CB(skb)->tun_id = 0;
+	OVS_CB(skb)->tun_ipv4_src = 0;
+	OVS_CB(skb)->tun_ipv4_dst = 0;
+	OVS_CB(skb)->tun_ipv4_ttl = 0;
+	OVS_CB(skb)->tun_ipv4_tos = 0;
 	error = do_execute_actions(dp, skb, acts->actions,
 					 acts->actions_len, false);
 

@@ -41,10 +41,12 @@
  */
 #define TNL_T_PROTO_GRE		0
 #define TNL_T_PROTO_CAPWAP	1
+#define TNL_T_PROTO_VXLAN	2
 
 /* These flags are only needed when calling tnl_find_port(). */
 #define TNL_T_KEY_EXACT		(1 << 10)
 #define TNL_T_KEY_MATCH		(1 << 11)
+#define TNL_T_IPSEC		(1 << 12)
 
 /* Private flags not exposed to userspace in this form. */
 #define TNL_F_IN_KEY_MATCH	(1 << 16) /* Store the key in tun_id to
@@ -125,6 +127,15 @@ struct tnl_mutable_config {
 struct tnl_ops {
 	u32 tunnel_type;	/* Put the TNL_T_PROTO_* type in here. */
 	u8 ipproto;		/* The IP protocol for the tunnel. */
+
+	/*
+	 * Source and destination port for the tunnel.  This is necessary
+	 * if the tunnel protocol is using TCP or UDP within IPsec.  The
+	 * IPsec transformation is done as part of the route lookup, so
+	 * setting the transport port must be done early.
+	 */
+	__be16 sport;
+	__be16 dport;
 
 	/*
 	 * Returns the length of the tunnel header that will be added in

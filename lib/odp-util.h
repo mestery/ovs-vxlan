@@ -79,10 +79,11 @@ int odp_actions_from_string(const char *, const struct shash *port_names,
  *  OVS_KEY_ATTR_IPV6         40    --     4     44
  *  OVS_KEY_ATTR_ICMPV6        2     2     4      8
  *  OVS_KEY_ATTR_ND           28    --     4     32
+ *  OVS_KEY_ATTR_TUNNEL       20    --     4     24
  *  -------------------------------------------------
- *  total                                       144
+ *  total                                       168
  */
-#define ODPUTIL_FLOW_KEY_BYTES 144
+#define ODPUTIL_FLOW_KEY_BYTES 168
 
 /* A buffer with sufficient size and alignment to hold an nlattr-formatted flow
  * key.  An array of "struct nlattr" might not, in theory, be sufficiently

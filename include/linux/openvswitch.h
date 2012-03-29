@@ -185,6 +185,7 @@ enum ovs_vport_type {
 	OVS_VPORT_TYPE_PATCH = 100, /* virtual tunnel connecting two vports */
 	OVS_VPORT_TYPE_GRE,      /* GRE tunnel */
 	OVS_VPORT_TYPE_CAPWAP,   /* CAPWAP tunnel */
+	OVS_VPORT_TYPE_VXLAN,    /* VXLAN tunnel */
 	__OVS_VPORT_TYPE_MAX
 };
 
@@ -278,6 +279,7 @@ enum ovs_key_attr {
 	OVS_KEY_ATTR_ICMPV6,    /* struct ovs_key_icmpv6 */
 	OVS_KEY_ATTR_ARP,       /* struct ovs_key_arp */
 	OVS_KEY_ATTR_ND,        /* struct ovs_key_nd */
+	OVS_KEY_ATTR_TUNNEL=62,	/* struct ovs_key_tunnel */
 	OVS_KEY_ATTR_TUN_ID = 63, /* be64 tunnel ID */
 	__OVS_KEY_ATTR_MAX
 };
@@ -358,6 +360,15 @@ struct ovs_key_nd {
 	__u32 nd_target[4];
 	__u8  nd_sll[6];
 	__u8  nd_tll[6];
+};
+
+struct ovs_key_tunnel {
+	__be64 tun_id;
+	__be32 ipv4_src;
+	__be32 ipv4_dst;
+	__u8   ipv4_tos;
+	__u8   ipv4_ttl;
+	__u8   pad[2];
 };
 
 /**

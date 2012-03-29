@@ -26,7 +26,8 @@ openvswitch_sources = \
 	vport-gre.c \
 	vport-internal_dev.c \
 	vport-netdev.c \
-	vport-patch.c
+	vport-patch.c \
+	vport-vxlan.c
 
 openvswitch_headers = \
 	checksum.h \
@@ -41,7 +42,8 @@ openvswitch_headers = \
 	vport-capwap.h \
 	vport-generic.h \
 	vport-internal_dev.h \
-	vport-netdev.h
+	vport-netdev.h \
+	vport-vxlan.h
 
 openvswitch_extras = \
 	README \

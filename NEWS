@@ -1,5 +1,8 @@
 post-v1.6.0
 ------------------------
+    - New support for the experimental VXLAN tunnel protocol (see
+      http://tools.ietf.org/html/draft-mahalingam-dutt-dcops-vxlan-00)
+      and VXLAN over IPSEC.
     - kernel modules are renamed. openvswitch_mod.ko is now
       openvswitch.ko and brcompat_mod.ko is now brcompat.ko.
     - Increased the number of NXM registers to 8.

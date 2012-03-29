@@ -92,6 +92,14 @@ struct sw_flow_key {
 			} nd;
 		} ipv6;
 	};
+	struct {
+		__be64	tun_id;		/* Encapsulating tunnel ID. */
+		__be32	ipv4_src;	/* Outer tunnel src IP */
+		__be32	ipv4_dst;	/* Outer tunnel dst IP */
+		u8	ipv4_tos;	/* Outer tunnel IP TOS */
+		u8	ipv4_ttl;	/* Outer tunnel IP TTL */
+		u8	pad[2];		/* padding */
+	} tunnel;
 };
 
 struct sw_flow {
@@ -157,10 +165,11 @@ u64 ovs_flow_used_time(unsigned long flow_jiffies);
  *  OVS_KEY_ATTR_IPV6         40    --     4     44
  *  OVS_KEY_ATTR_ICMPV6        2     2     4      8
  *  OVS_KEY_ATTR_ND           28    --     4     32
+ *  OVS_KEY_ATTR_TUNNEL       20    --     4     24
  *  -------------------------------------------------
- *  total                                       144
+ *  total                                       168
  */
-#define FLOW_BUFSIZE 144
+#define FLOW_BUFSIZE 168
 
 int ovs_flow_to_nlattrs(const struct sw_flow_key *, struct sk_buff *);
 int ovs_flow_from_nlattrs(struct sw_flow_key *swkey, int *key_lenp,

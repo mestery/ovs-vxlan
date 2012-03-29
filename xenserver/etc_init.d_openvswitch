@@ -80,7 +80,9 @@ start () {
 
     start_ovs_xapi_sync
 
+    # Allow tunnel traffic.
     $ovs_ctl --protocol=gre enable-protocol
+    $ovs_ctl --protocol=udp --dport=4341 enable-protocol
 
     touch /var/lock/subsys/openvswitch
 }

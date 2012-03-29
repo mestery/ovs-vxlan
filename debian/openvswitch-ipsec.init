@@ -1,5 +1,6 @@
 #!/bin/sh
 #
+# Copyright (c) 2011 Nicira Networks
 # Copyright (c) 2007, 2009 Javier Fernandez-Sanguino <jfs@debian.org>
 #
 # This is free software; you may redistribute it and/or modify
@@ -23,9 +24,9 @@
 # Required-Stop:     $remote_fs
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
-# Short-Description: Open vSwitch GRE-over-IPsec daemon
+# Short-Description: Open vSwitch IPsec tunnel daemon
 # Description:       The ovs-monitor-ipsec script provides support for encrypting GRE
-#                    tunnels with IPsec.
+#                    and VXLAN tunnels with IPsec.
 ### END INIT INFO
 
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
