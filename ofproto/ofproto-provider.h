@@ -36,10 +36,10 @@ struct ofputil_flow_mod;
  * With few exceptions, ofproto implementations may look at these fields but
  * should not modify them. */
 struct ofproto {
+    struct hmap_node hmap_node; /* In global 'all_ofprotos' hmap. */
     const struct ofproto_class *ofproto_class;
     char *type;                 /* Datapath type. */
     char *name;                 /* Datapath name. */
-    struct hmap_node hmap_node; /* In global 'all_ofprotos' hmap. */
 
     /* Settings. */
     uint64_t fallback_dpid;     /* Datapath ID if no better choice found. */
@@ -94,8 +94,8 @@ struct ofport *ofproto_get_port(const struct ofproto *, uint16_t ofp_port);
  * With few exceptions, ofproto implementations may look at these fields but
  * should not modify them. */
 struct ofport {
-    struct ofproto *ofproto;    /* The ofproto that contains this port. */
     struct hmap_node hmap_node; /* In struct ofproto's "ports" hmap. */
+    struct ofproto *ofproto;    /* The ofproto that contains this port. */
     struct netdev *netdev;
     struct ofputil_phy_port pp;
     uint16_t ofp_port;          /* OpenFlow port number. */
@@ -156,8 +156,8 @@ struct oftable {
  * With few exceptions, ofproto implementations may look at these fields but
  * should not modify them. */
 struct rule {
-    struct ofproto *ofproto;     /* The ofproto that contains this rule. */
     struct list ofproto_node;    /* Owned by ofproto base code. */
+    struct ofproto *ofproto;     /* The ofproto that contains this rule. */
     struct cls_rule cr;          /* In owning ofproto's classifier. */
 
     struct ofoperation *pending; /* Operation now in progress, if nonnull. */
@@ -979,6 +979,17 @@ struct ofproto_class {
      * not support CFM. */
     int (*get_cfm_remote_mpids)(const struct ofport *ofport,
                                 const uint64_t **rmps, size_t *n_rmps);
+
+    /* Checks the health of CFM configured on 'ofport'.  Returns an integer
+     * to indicate the health percentage of the 'ofport' which is an average of
+     * the health of all the remote_mps.  Returns an integer between 0 and 100
+     * where 0 means that the 'ofport' is very unhealthy and 100 means the
+     * 'ofport' is perfectly healthy.  Returns -1 if CFM is not enabled on
+     * 'port' or if the number of remote_mpids is > 1.
+     *
+     * This function may be a null pointer if the ofproto implementation does
+     * not support CFM. */
+    int (*get_cfm_health)(const struct ofport *ofport);
 
     /* Configures spanning tree protocol (STP) on 'ofproto' using the
      * settings defined in 's'.

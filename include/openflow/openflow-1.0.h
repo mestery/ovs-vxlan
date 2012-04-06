@@ -178,13 +178,24 @@ struct ofp10_port_mod {
 };
 OFP_ASSERT(sizeof(struct ofp10_port_mod) == 32);
 
-/* Why is this packet being sent to the controller? */
-enum ofp_packet_in_reason {
-    OFPR_NO_MATCH,          /* No matching flow. */
-    OFPR_ACTION,            /* Action explicitly output to controller. */
-    OFPR_INVALID_TTL        /* Packet has invalid TTL. */,
-    OFPR_N_REASONS
+/* Query for port queue configuration. */
+struct ofp10_queue_get_config_request {
+    struct ofp_header header;
+    ovs_be16 port;          /* Port to be queried. Should refer
+                               to a valid physical port (i.e. < OFPP_MAX) */
+    uint8_t pad[2];
+    /* 32-bit alignment. */
 };
+OFP_ASSERT(sizeof(struct ofp10_queue_get_config_request) == 12);
+
+/* Queue configuration for a given port. */
+struct ofp10_queue_get_config_reply {
+    struct ofp_header header;
+    ovs_be16 port;
+    uint8_t pad[6];
+    /* struct ofp10_packet_queue queues[0]; List of configured queues. */
+};
+OFP_ASSERT(sizeof(struct ofp10_queue_get_config_reply) == 16);
 
 /* Packet received on port (datapath -> controller). */
 struct ofp_packet_in {
@@ -471,13 +482,6 @@ struct ofp_flow_mod {
                                             header. */
 };
 OFP_ASSERT(sizeof(struct ofp_flow_mod) == 72);
-
-/* Why was this flow removed? */
-enum ofp_flow_removed_reason {
-    OFPRR_IDLE_TIMEOUT,         /* Flow idle time exceeded idle_timeout. */
-    OFPRR_HARD_TIMEOUT,         /* Time exceeded hard_timeout. */
-    OFPRR_DELETE                /* Evicted by a DELETE flow mod. */
-};
 
 /* Flow removed (datapath -> controller). */
 struct ofp_flow_removed {

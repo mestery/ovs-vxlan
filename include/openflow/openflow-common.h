@@ -73,6 +73,7 @@
  */
 #define OFP10_VERSION   0x01
 #define OFP11_VERSION   0x02
+#define OFP12_VERSION   0x03
 
 #define OFP_MAX_TABLE_NAME_LEN 32
 #define OFP_MAX_PORT_NAME_LEN  16
@@ -145,6 +146,37 @@ enum ofp_port_features {
     OFPPF_10GB_FD    = 1 << 6,  /* 10 Gb full-duplex rate support. */
 };
 
+struct ofp_packet_queue {
+    ovs_be32 queue_id;          /* id for the specific queue. */
+    ovs_be16 len;               /* Length in bytes of this queue desc. */
+    uint8_t pad[2];             /* 64-bit alignment. */
+    /* struct ofp_queue_prop_header properties[0]; List of properties.  */
+};
+OFP_ASSERT(sizeof(struct ofp_packet_queue) == 8);
+
+enum ofp_queue_properties {
+    OFPQT_NONE = 0,       /* No property defined for queue (default). */
+    OFPQT_MIN_RATE,       /* Minimum datarate guaranteed. */
+                          /* Other types should be added here
+                           * (i.e. max rate, precedence, etc). */
+};
+
+/* Common description for a queue. */
+struct ofp_queue_prop_header {
+    ovs_be16 property; /* One of OFPQT_. */
+    ovs_be16 len;      /* Length of property, including this header. */
+    uint8_t pad[4];    /* 64-bit alignemnt. */
+};
+OFP_ASSERT(sizeof(struct ofp_queue_prop_header) == 8);
+
+/* Min-Rate queue property description. */
+struct ofp_queue_prop_min_rate {
+    struct ofp_queue_prop_header prop_header; /* prop: OFPQT_MIN, len: 16. */
+    ovs_be16 rate;        /* In 1/10 of a percent; >1000 -> disabled. */
+    uint8_t pad[6];       /* 64-bit alignment */
+};
+OFP_ASSERT(sizeof(struct ofp_queue_prop_min_rate) == 16);
+
 /* Switch features. */
 struct ofp_switch_features {
     struct ofp_header header;
@@ -158,7 +190,7 @@ struct ofp_switch_features {
     uint8_t pad[3];         /* Align to 64-bits. */
 
     /* Features. */
-    ovs_be32 capabilities;  /* OFPC_*, OFPC10_*, OFPC11_*. */
+    ovs_be32 capabilities;  /* OFPC_*, OFPC10_*, OFPC11_*, OFPC12_*. */
     ovs_be32 actions;       /* Bitmap of supported "ofp_action_type"s. */
 
     /* Followed by an array of struct ofp10_phy_port or struct ofp11_port
@@ -178,6 +210,22 @@ enum ofp_capabilities {
                                       pkts. */
 };
 
+/* Why is this packet being sent to the controller? */
+enum ofp_packet_in_reason {
+    OFPR_NO_MATCH,          /* No matching flow. */
+    OFPR_ACTION,            /* Action explicitly output to controller. */
+    OFPR_INVALID_TTL        /* Packet has invalid TTL. */,
+    OFPR_N_REASONS
+};
+
+/* Why was this flow removed? */
+enum ofp_flow_removed_reason {
+    OFPRR_IDLE_TIMEOUT,         /* Flow idle time exceeded idle_timeout. */
+    OFPRR_HARD_TIMEOUT,         /* Time exceeded hard_timeout. */
+    OFPRR_DELETE,               /* Evicted by a DELETE flow mod. */
+    OFPRR_GROUP_DELETE          /* Group was removed. */
+};
+
 /* What changed about the physical port */
 enum ofp_port_reason {
     OFPPR_ADD,              /* The port was added. */
@@ -193,5 +241,18 @@ struct ofp_port_status {
     /* Followed by struct ofp10_phy_port or struct ofp11_port.  */
 };
 OFP_ASSERT(sizeof(struct ofp_port_status) == 16);
+
+/* The match type indicates the match structure (set of fields that compose the
+ * match) in use. The match type is placed in the type field at the beginning
+ * of all match structures. The "OpenFlow Extensible Match" type corresponds
+ * to OXM TLV format described below and must be supported by all OpenFlow
+ * switches. Extensions that define other match types may be published on the
+ * ONF wiki. Support for extensions is optional.
+ */
+enum ofp_match_type {
+    OFPMT_STANDARD = 0,         /* The match fields defined in the ofp11_match
+                                   structure apply */
+    OFPMT_OXM = 1,              /* OpenFlow Extensible Match */
+};
 
 #endif /* openflow/openflow-common.h */
