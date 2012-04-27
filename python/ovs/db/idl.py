@@ -52,7 +52,13 @@ class Idl:
       'rows' map values.  Refer to Row for more details.
 
     - 'change_seqno': A number that represents the IDL's state.  When the IDL
-      is updated (by Idl.run()), its value changes.
+      is updated (by Idl.run()), its value changes.  The sequence number can
+      occasionally change even if the database does not.  This happens if the
+      connection to the database drops and reconnects, which causes the
+      database contents to be reloaded even if they didn't change.  (It could
+      also happen if the database server sends out a "change" that reflects
+      what the IDL already thought was in the database.  The database server is
+      not supposed to do that, but bugs could in theory cause it to do so.)
 
     - 'lock_name': The name of the lock configured with Idl.set_lock(), or None
       if no lock is configured.
@@ -447,7 +453,7 @@ class Idl:
     def __txn_abort_all(self):
         while self._outstanding_txns:
             txn = self._outstanding_txns.popitem()[1]
-            txn._status = Transaction.AGAIN_WAIT
+            txn._status = Transaction.TRY_AGAIN
 
     def __txn_process_reply(self, msg):
         txn = self._outstanding_txns.pop(msg.id, None)
@@ -567,9 +573,7 @@ class Row(object):
         if 'column_name' changed in this row (or if this row was deleted)
         between the time that the IDL originally read its contents and the time
         that the transaction commits, then the transaction aborts and
-        Transaction.commit() returns Transaction.AGAIN_WAIT or
-        Transaction.AGAIN_NOW (depending on whether the database change has
-        already been received).
+        Transaction.commit() returns Transaction.TRY_AGAIN.
 
         The intention is that, to ensure that no transaction commits based on
         dirty reads, an application should call Row.verify() on each data item
@@ -606,6 +610,21 @@ class Row(object):
         self.__dict__["_changes"] = None
         del self._table.rows[self.uuid]
 
+    def increment(self, column_name):
+        """Causes the transaction, when committed, to increment the value of
+        'column_name' within this row by 1.  'column_name' must have an integer
+        type.  After the transaction commits successfully, the client may
+        retrieve the final (incremented) value of 'column_name' with
+        Transaction.get_increment_new_value().
+
+        The client could accomplish something similar by reading and writing
+        and verify()ing columns.  However, increment() will never (by itself)
+        cause a transaction to fail because of a verify error.
+
+        The intended use is for incrementing the "next_cfg" column in
+        the Open_vSwitch table."""
+        self._idl.txn._increment(self, column_name)
+
 
 def _uuid_name_from_uuid(uuid):
     return "row%s" % str(uuid).replace("-", "_")
@@ -622,18 +641,59 @@ class _InsertedRow(object):
 
 
 class Transaction(object):
+    """A transaction may modify the contents of a database by modifying the
+    values of columns, deleting rows, inserting rows, or adding checks that
+    columns in the database have not changed ("verify" operations), through
+    Row methods.
+
+    Reading and writing columns and inserting and deleting rows are all
+    straightforward.  The reasons to verify columns are less obvious.
+    Verification is the key to maintaining transactional integrity.  Because
+    OVSDB handles multiple clients, it can happen that between the time that
+    OVSDB client A reads a column and writes a new value, OVSDB client B has
+    written that column.  Client A's write should not ordinarily overwrite
+    client B's, especially if the column in question is a "map" column that
+    contains several more or less independent data items.  If client A adds a
+    "verify" operation before it writes the column, then the transaction fails
+    in case client B modifies it first.  Client A will then see the new value
+    of the column and compose a new transaction based on the new contents
+    written by client B.
+
+    When a transaction is complete, which must be before the next call to
+    Idl.run(), call Transaction.commit() or Transaction.abort().
+
+    The life-cycle of a transaction looks like this:
+
+    1. Create the transaction and record the initial sequence number:
+
+        seqno = idl.change_seqno(idl)
+        txn = Transaction(idl)
+
+    2. Modify the database with Row and Transaction methods.
+
+    3. Commit the transaction by calling Transaction.commit().  The first call
+       to this function probably returns Transaction.INCOMPLETE.  The client
+       must keep calling again along as this remains true, calling Idl.run() in
+       between to let the IDL do protocol processing.  (If the client doesn't
+       have anything else to do in the meantime, it can use
+       Transaction.commit_block() to avoid having to loop itself.)
+
+    4. If the final status is Transaction.TRY_AGAIN, wait for Idl.change_seqno
+       to change from the saved 'seqno' (it's possible that it's already
+       changed, in which case the client should not wait at all), then start
+       over from step 1.  Only a call to Idl.run() will change the return value
+       of Idl.change_seqno.  (Transaction.commit_block() calls Idl.run().)"""
+
     # Status values that Transaction.commit() can return.
     UNCOMMITTED = "uncommitted"  # Not yet committed or aborted.
     UNCHANGED = "unchanged"      # Transaction didn't include any changes.
     INCOMPLETE = "incomplete"    # Commit in progress, please wait.
     ABORTED = "aborted"          # ovsdb_idl_txn_abort() called.
     SUCCESS = "success"          # Commit successful.
-    AGAIN_WAIT = "wait then try again"
-                                 # Commit failed because a "verify" operation
+    TRY_AGAIN = "try again"      # Commit failed because a "verify" operation
                                  # reported an inconsistency, due to a network
                                  # problem, or other transient failure.  Wait
                                  # for a change, then try again.
-    AGAIN_NOW = "try again now"  # Same as AGAIN_WAIT but try again right away.
     NOT_LOCKED = "not locked"    # Server hasn't given us the lock yet.
     ERROR = "error"              # Commit failed due to a hard error.
 
@@ -670,9 +730,8 @@ class Transaction(object):
         self._comments = []
         self._commit_seqno = self.idl.change_seqno
 
-        self._inc_table = None
+        self._inc_row = None
         self._inc_column = None
-        self._inc_where = None
 
         self._inserted_rows = {}  # Map from UUID to _InsertedRow
 
@@ -683,13 +742,9 @@ class Transaction(object):
         relatively human-readable form.)"""
         self._comments.append(comment)
 
-    def increment(self, table, column, where):
-        assert not self._inc_table
-        self._inc_table = table
-        self._inc_column = column
-        self._inc_where = where
-
     def wait(self, poller):
+        """Causes poll_block() to wake up if this transaction has completed
+        committing."""
         if self._status not in (Transaction.UNCOMMITTED,
                                 Transaction.INCOMPLETE):
             poller.immediate_wake()
@@ -718,16 +773,56 @@ class Transaction(object):
         self._txn_rows = {}
 
     def commit(self):
-        """Attempts to commit this transaction and returns the status of the
-        commit operation, one of the constants declared as class attributes.
-        If the return value is Transaction.INCOMPLETE, then the transaction is
-        not yet complete and the caller should try calling again later, after
-        calling Idl.run() to run the Idl.
+        """Attempts to commit 'txn'.  Returns the status of the commit
+        operation, one of the following constants:
+
+          Transaction.INCOMPLETE:
+
+              The transaction is in progress, but not yet complete.  The caller
+              should call again later, after calling Idl.run() to let the
+              IDL do OVSDB protocol processing.
+
+          Transaction.UNCHANGED:
+
+              The transaction is complete.  (It didn't actually change the
+              database, so the IDL didn't send any request to the database
+              server.)
+
+          Transaction.ABORTED:
+
+              The caller previously called Transaction.abort().
+
+          Transaction.SUCCESS:
+
+              The transaction was successful.  The update made by the
+              transaction (and possibly other changes made by other database
+              clients) should already be visible in the IDL.
+
+          Transaction.TRY_AGAIN:
+
+              The transaction failed for some transient reason, e.g. because a
+              "verify" operation reported an inconsistency or due to a network
+              problem.  The caller should wait for a change to the database,
+              then compose a new transaction, and commit the new transaction.
+
+              Use Idl.change_seqno to wait for a change in the database.  It is
+              important to use its value *before* the initial call to
+              Transaction.commit() as the baseline for this purpose, because
+              the change that one should wait for can happen after the initial
+              call but before the call that returns Transaction.TRY_AGAIN, and
+              using some other baseline value in that situation could cause an
+              indefinite wait if the database rarely changes.
+
+          Transaction.NOT_LOCKED:
+
+              The transaction failed because the IDL has been configured to
+              require a database lock (with Idl.set_lock()) but didn't
+              get it yet or has already lost it.
 
         Committing a transaction rolls back all of the changes that it made to
-        the Idl's copy of the database.  If the transaction commits
+        the IDL's copy of the database.  If the transaction commits
         successfully, then the database server will send an update and, thus,
-        the Idl will be updated with the committed changes."""
+        the IDL will be updated with the committed changes."""
         # The status can only change if we're the active transaction.
         # (Otherwise, our status will change only in Idl.run().)
         if self != self.idl.txn:
@@ -807,18 +902,18 @@ class Transaction(object):
                     operations.append(op)
 
         # Add increment.
-        if self._inc_table and any_updates:
+        if self._inc_row and any_updates:
             self._inc_index = len(operations) - 1
 
             operations.append({"op": "mutate",
-                               "table": self._inc_table,
+                               "table": self._inc_row._table.name,
                                "where": self._substitute_uuids(
-                                   self._inc_where),
+                                   _where_uuid_equals(self._inc_row.uuid)),
                                "mutations": [[self._inc_column, "+=", 1]]})
             operations.append({"op": "select",
-                               "table": self._inc_table,
+                               "table": self._inc_row._table.name,
                                "where": self._substitute_uuids(
-                                   self._inc_where),
+                                   _where_uuid_equals(self._inc_row.uuid)),
                                "columns": [self._inc_column]})
 
         # Add comment.
@@ -839,12 +934,18 @@ class Transaction(object):
                 self.idl._outstanding_txns[self._request_id] = self
                 self._status = Transaction.INCOMPLETE
             else:
-                self._status = Transaction.AGAIN_WAIT
+                self._status = Transaction.TRY_AGAIN
 
         self.__disassemble()
         return self._status
 
     def commit_block(self):
+        """Attempts to commit this transaction, blocking until the commit
+        either succeeds or fails.  Returns the final commit status, which may
+        be any Transaction.* value other than Transaction.INCOMPLETE.
+
+        This function calls Idl.run() on this transaction'ss IDL, so it may
+        cause Idl.change_seqno to change."""
         while True:
             status = self.commit()
             if status != Transaction.INCOMPLETE:
@@ -858,6 +959,9 @@ class Transaction(object):
             poller.block()
 
     def get_increment_new_value(self):
+        """Returns the final (incremented) value of the column in this
+        transaction that was set to be incremented by Row.increment.  This
+        transaction must have committed successfully."""
         assert self._status == Transaction.SUCCESS
         return self._inc_new_value
 
@@ -901,6 +1005,11 @@ class Transaction(object):
         if inserted_row:
             return inserted_row.real
         return None
+
+    def _increment(self, row, column):
+        assert not self._inc_row
+        self._inc_row = row
+        self._inc_column = column
 
     def _write(self, row, column, datum):
         assert row._changes is not None
@@ -982,7 +1091,7 @@ class Transaction(object):
                     vlog.warn("operation reply is not JSON null or object")
 
             if not soft_errors and not hard_errors and not lock_errors:
-                if self._inc_table and not self.__process_inc_reply(ops):
+                if self._inc_row and not self.__process_inc_reply(ops):
                     hard_errors = True
 
                 for insert in self._inserted_rows.itervalues():
@@ -994,10 +1103,7 @@ class Transaction(object):
             elif lock_errors:
                 self._status = Transaction.NOT_LOCKED
             elif soft_errors:
-                if self._commit_seqno == self.idl.change_seqno:
-                    self._status = Transaction.AGAIN_WAIT
-                else:
-                    self._status = Transaction.AGAIN_NOW
+                self._status = Transaction.TRY_AGAIN
             else:
                 self._status = Transaction.SUCCESS
 

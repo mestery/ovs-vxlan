@@ -674,7 +674,7 @@ set_pvconns(struct pvconn ***pvconnsp, size_t *n_pvconnsp,
         struct pvconn *pvconn;
         int error;
 
-        error = pvconn_open(name, &pvconn, DSCP_INVALID);
+        error = pvconn_open(name, &pvconn, 0);
         if (!error) {
             pvconns[n_pvconns++] = pvconn;
         } else {
@@ -1225,9 +1225,7 @@ ofconn_send(const struct ofconn *ofconn, struct ofpbuf *msg,
             struct rconn_packet_counter *counter)
 {
     update_openflow_length(msg);
-    if (rconn_send(ofconn->rconn, msg, counter)) {
-        ofpbuf_delete(msg);
-    }
+    rconn_send(ofconn->rconn, msg, counter);
 }
 
 /* Sending asynchronous messages. */

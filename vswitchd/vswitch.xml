@@ -894,33 +894,16 @@
           numerically lower priority.
         </column>
 
-        <column name="other_config" key="lacp-time">
+        <column name="other_config" key="lacp-time"
+          type='{"type": "string", "enum": ["set", ["fast", "slow"]]}'>
           <p>
             The LACP timing which should be used on this <ref table="Port"/>.
-            Possible values are <code>fast</code>, <code>slow</code> and a
-            positive number of milliseconds.  By default <code>slow</code> is
-            used.  When configured to be <code>fast</code> LACP heartbeats are
-            requested at a rate of once per second causing connectivity
-            problems to be detected more quickly.  In <code>slow</code> mode,
-            heartbeats are requested at a rate of once every 30 seconds.
+            By default <code>slow</code> is used.  When configured to be
+            <code>fast</code> LACP heartbeats are requested at a rate of once
+            per second causing connectivity problems to be detected more
+            quickly.  In <code>slow</code> mode, heartbeats are requested at a
+            rate of once every 30 seconds.
           </p>
-
-          <p>
-            Users may manually set a heartbeat transmission rate to increase
-            the fault detection speed further.  When manually set, OVS expects
-            the partner switch to be configured with the same transmission
-            rate.  Manually setting <code>lacp-time</code> to something other
-            than <code>fast</code> or <code>slow</code> is not supported by the
-            LACP specification.
-          </p>
-        </column>
-
-        <column name="other_config" key="lacp-heartbeat"
-                type='{"type": "boolean"}'>
-          Treat LACP like a simple heartbeat protocol for link state
-          monitoring.  Most features of the LACP protocol are disabled
-          when this mode is in use.  The default if not specified is
-          <code>false</code>.
         </column>
       </group>
 
@@ -1906,6 +1889,32 @@
         commonly be the same as <ref column="external_ids" key="xs-vif-uuid"/>.
       </column>
 
+      <column name="external_ids" key="iface-status"
+              type='{"type": "string",
+                    "enum": ["set", ["active", "inactive"]]}'>
+        <p>
+          Hypervisors may sometimes have more than one interface associated
+          with a given <ref column="external_ids" key="iface-id"/>, only one of
+          which is actually in use at a given time.  For example, in some
+          circumstances XenServer has both a ``tap'' and a ``vif'' interface
+          for a single <ref column="external_ids" key="iface-id"/>, but only
+          uses one of them at a time.  A hypervisor that behaves this way must
+          mark the currently in use interface <code>active</code> and the
+          others <code>inactive</code>.  A hypervisor that never has more than
+          one interface for a given <ref column="external_ids" key="iface-id"/>
+          may mark that interface <code>active</code> or omit <ref
+          column="external_ids" key="iface-status"/> entirely.
+        </p>
+
+        <p>
+          During VM migration, a given <ref column="external_ids"
+          key="iface-id"/> might transiently be marked <code>active</code> on
+          two different hypervisors.  That is, <code>active</code> means that
+          this <ref column="external_ids" key="iface-id"/> is the active
+          instance within a single hypervisor, not in a broader scope.
+        </p>
+      </column>
+
       <column name="external_ids" key="xs-vif-uuid">
         The virtual interface associated with this interface.
       </column>
@@ -2735,16 +2744,16 @@
 
       <column name="other_config" key="dscp"
                 type='{"type": "integer"}'>
-        The Differentiated Service Code Point (DSCP) is specified in the IP
-        header. They are specified using 6 bits in the Type of Service (TOS)
-        field in the IP header. DSCP provides a mechanism to classify the
-        network traffic and provide the Quality of Service (QoS) on IP
-        networks.
-        The DSCP value passed is used when establishing the connection between
-        the controller and the Open vSwitch.  The connection must be reset
-        for the new DSCP values to take effect.  If no value is
-        specified, a default value of 192 is chosen for connection
-        establishment.  Valid DSCP values must have their lower 2 bits set to 0.
+        The Differentiated Service Code Point (DSCP) is specified using 6 bits
+        in the Type of Service (TOS) field in the IP header. DSCP provides a
+        mechanism to classify the network traffic and provide Quality of
+        Service (QoS) on IP networks.
+
+        The DSCP value specified here is used when establishing the connection
+        between the controller and the Open vSwitch.  The connection must be
+        reset for the new DSCP values to take effect.  If no value is
+        specified, a default value of 48 is chosen.  Valid DSCP values must be
+        in the range 0 to 63.
       </column>
     </group>
 
@@ -2982,16 +2991,16 @@
 
       <column name="other_config" key="dscp"
                 type='{"type": "integer"}'>
-        The Differentiated Service Code Point (DSCP) is specified in the IP
-        header. They are specified using 6 bits in the Type of Service (TOS)
-        field in the IP header. DSCP provides a mechanism to classify the
-        network traffic and provide the Quality of Service (QoS) on IP
-        networks.
-        The DSCP value passed when establishing the connection between
-        the manager and the Open vSwitch Database.  The connection must be
+        The Differentiated Service Code Point (DSCP) is specified using 6 bits
+        in the Type of Service (TOS) field in the IP header. DSCP provides a
+        mechanism to classify the network traffic and provide Quality of
+        Service (QoS) on IP networks.
+
+        The DSCP value specified here is used when establishing the connection
+        between the manager and the Open vSwitch.  The connection must be
         reset for the new DSCP values to take effect.  If no value is
-        specified, a default value of 192 is chosen for connection
-        establishment.  Valid DSCP values must have their lower 2 bits set to 0.
+        specified, a default value of 48 is chosen.  Valid DSCP values must be
+        in the range 0 to 63.
       </column>
     </group>
 

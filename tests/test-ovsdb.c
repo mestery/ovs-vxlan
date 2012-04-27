@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -1825,10 +1825,19 @@ idl_set(struct ovsdb_idl *idl, char *commands, int step)
                           arg2);
             }
         } else if (!strcmp(name, "increment")) {
-            if (!arg2 || arg3) {
-                ovs_fatal(0, "\"increment\" command requires 2 arguments");
+            const struct idltest_simple *s;
+
+            if (!arg1 || arg2) {
+                ovs_fatal(0, "\"increment\" command requires 1 argument");
             }
-            ovsdb_idl_txn_increment(txn, arg1, arg2, NULL);
+
+            s = idltest_find_simple(idl, atoi(arg1));
+            if (!s) {
+                ovs_fatal(0, "\"set\" command asks for nonexistent "
+                          "i=%d", atoi(arg1));
+            }
+
+            ovsdb_idl_txn_increment(txn, &s->header_, &idltest_simple_col_i);
             increment = true;
         } else if (!strcmp(name, "abort")) {
             ovsdb_idl_txn_abort(txn);
@@ -1893,7 +1902,11 @@ do_idl(int argc, char *argv[])
             arg++;
         } else {
             /* Wait for update. */
-            while (ovsdb_idl_get_seqno(idl) == seqno && !ovsdb_idl_run(idl)) {
+            for (;;) {
+                ovsdb_idl_run(idl);
+                if (ovsdb_idl_get_seqno(idl) != seqno) {
+                    break;
+                }
                 jsonrpc_run(rpc);
 
                 ovsdb_idl_wait(idl);
@@ -1933,7 +1946,11 @@ do_idl(int argc, char *argv[])
     if (rpc) {
         jsonrpc_close(rpc);
     }
-    while (ovsdb_idl_get_seqno(idl) == seqno && !ovsdb_idl_run(idl)) {
+    for (;;) {
+        ovsdb_idl_run(idl);
+        if (ovsdb_idl_get_seqno(idl) != seqno) {
+            break;
+        }
         ovsdb_idl_wait(idl);
         poll_block();
     }

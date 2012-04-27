@@ -11,6 +11,15 @@ post-v1.6.0
       Internetwork Control (0xc0).
     - Added the granular link health statistics, 'cfm_health', to an
       interface.
+    - OpenFlow:
+        - Added support to mask nd_target for ICMPv6 neighbor discovery flows.
+    - ovs-test:
+        - Added support for spawning ovs-test server from the client.
+        - Now ovs-test is able to automatically create test bridges and ports.
+    - "ovs-dpctl dump-flows" now prints observed TCP flags in TCP flows.
+    - The "coverage/log" command previously available through ovs-appctl
+      has been replaced by "coverage/show".  The new command replies with
+      coverage counter values, instead of logging them.
 
 
 v1.6.0 - xx xxx xxxx

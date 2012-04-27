@@ -253,6 +253,7 @@ EXTRA_DIST += \
 MAN_FRAGMENTS += \
 	lib/common.man \
 	lib/common-syn.man \
+	lib/coverage-unixctl.man \
 	lib/daemon.man \
 	lib/daemon-syn.man \
 	lib/leak-checker.man \
@@ -299,7 +300,7 @@ $(srcdir)/lib/ofp-errors.inc: \
 	lib/ofp-errors.h $(srcdir)/build-aux/extract-ofp-errors
 	$(PYTHON) $(srcdir)/build-aux/extract-ofp-errors \
 		$(srcdir)/lib/ofp-errors.h > $@.tmp && mv $@.tmp $@
-lib/ofp-errors.c: lib/ofp-errors.inc
+$(srcdir)/lib/ofp-errors.c: $(srcdir)/lib/ofp-errors.inc
 EXTRA_DIST += build-aux/extract-ofp-errors lib/ofp-errors.inc
 
 INSTALL_DATA_LOCAL += lib-install-data-local

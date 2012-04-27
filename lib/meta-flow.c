@@ -54,6 +54,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,
         true,
         NXM_NX_TUN_ID, "NXM_NX_TUN_ID",
+        0, NULL,
     }, {
         MFF_IN_PORT, "in_port", NULL,
         MF_FIELD_SIZES(be16),
@@ -62,6 +63,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,
         false,
         NXM_OF_IN_PORT, "NXM_OF_IN_PORT",
+        OXM_OF_IN_PORT, "OXM_OF_IN_PORT",
     },
 
 #define REGISTER(IDX)                           \
@@ -73,7 +75,8 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,                               \
         true,                                   \
         NXM_NX_REG(IDX),                        \
-        "NXM_NX_REG" #IDX                       \
+        "NXM_NX_REG" #IDX,                      \
+        0, NULL,                                \
     }
 #if FLOW_N_REGS > 0
     REGISTER(0),
@@ -115,6 +118,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,
         true,
         NXM_OF_ETH_SRC, "NXM_OF_ETH_SRC",
+        OXM_OF_ETH_SRC, "OXM_OF_ETH_SRC",
     }, {
         MFF_ETH_DST, "eth_dst", "dl_dst",
         MF_FIELD_SIZES(mac),
@@ -123,6 +127,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,
         true,
         NXM_OF_ETH_DST, "NXM_OF_ETH_DST",
+        OXM_OF_ETH_DST, "OXM_OF_ETH_DST",
     }, {
         MFF_ETH_TYPE, "eth_type", "dl_type",
         MF_FIELD_SIZES(be16),
@@ -131,6 +136,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,
         false,
         NXM_OF_ETH_TYPE, "NXM_OF_ETH_TYPE",
+        OXM_OF_ETH_TYPE, "OXM_OF_ETH_TYPE",
     },
 
     {
@@ -141,6 +147,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,
         true,
         NXM_OF_VLAN_TCI, "NXM_OF_VLAN_TCI",
+        0, NULL,
     }, {
         MFF_VLAN_VID, "dl_vlan", NULL,
         sizeof(ovs_be16), 12,
@@ -148,7 +155,8 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFS_DECIMAL,
         MFP_NONE,
         true,
-        0, NULL
+        0, NULL,
+        OXM_OF_VLAN_VID, "OXM_OF_VLAN_VID",
     }, {
         MFF_VLAN_PCP, "dl_vlan_pcp", NULL,
         1, 3,
@@ -156,7 +164,8 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFS_DECIMAL,
         MFP_NONE,
         true,
-        0, NULL
+        0, NULL,
+        OXM_OF_VLAN_PCP, "OXM_OF_VLAN_PCP",
     },
 
     /* ## -- ## */
@@ -171,6 +180,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_IPV4,
         true,
         NXM_OF_IP_SRC, "NXM_OF_IP_SRC",
+        OXM_OF_IPV4_SRC, "OXM_OF_IPV4_SRC",
     }, {
         MFF_IPV4_DST, "ip_dst", "nw_dst",
         MF_FIELD_SIZES(be32),
@@ -179,6 +189,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_IPV4,
         true,
         NXM_OF_IP_DST, "NXM_OF_IP_DST",
+        OXM_OF_IPV4_DST, "OXM_OF_IPV4_DST",
     },
 
     {
@@ -189,6 +200,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_IPV6,
         true,
         NXM_NX_IPV6_SRC, "NXM_NX_IPV6_SRC",
+        OXM_OF_IPV6_SRC, "OXM_OF_IPV6_SRC",
     }, {
         MFF_IPV6_DST, "ipv6_dst", NULL,
         MF_FIELD_SIZES(ipv6),
@@ -197,6 +209,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_IPV6,
         true,
         NXM_NX_IPV6_DST, "NXM_NX_IPV6_DST",
+        OXM_OF_IPV6_DST, "OXM_OF_IPV6_DST",
     },
     {
         MFF_IPV6_LABEL, "ipv6_label", NULL,
@@ -206,6 +219,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_IPV6,
         false,
         NXM_NX_IPV6_LABEL, "NXM_NX_IPV6_LABEL",
+        OXM_OF_IPV6_FLABEL, "OXM_OF_IPV6_FLABEL",
     },
 
     {
@@ -216,6 +230,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_IP_ANY,
         false,
         NXM_OF_IP_PROTO, "NXM_OF_IP_PROTO",
+        OXM_OF_IP_PROTO, "OXM_OF_IP_PROTO",
     }, {
         MFF_IP_DSCP, "nw_tos", NULL,
         MF_FIELD_SIZES(u8),
@@ -223,7 +238,8 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFS_DECIMAL,
         MFP_IP_ANY,
         true,
-        NXM_OF_IP_TOS, "NXM_OF_IP_TOS"
+        NXM_OF_IP_TOS, "NXM_OF_IP_TOS",
+        OXM_OF_IP_DSCP, "OXM_OF_IP_DSCP",
     }, {
         MFF_IP_ECN, "nw_ecn", NULL,
         1, 2,
@@ -232,6 +248,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_IP_ANY,
         true,
         NXM_NX_IP_ECN, "NXM_NX_IP_ECN",
+        OXM_OF_IP_ECN, "OXM_OF_IP_ECN",
     }, {
         MFF_IP_TTL, "nw_ttl", NULL,
         MF_FIELD_SIZES(u8),
@@ -239,7 +256,8 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFS_DECIMAL,
         MFP_IP_ANY,
         true,
-        NXM_NX_IP_TTL, "NXM_NX_IP_TTL"
+        NXM_NX_IP_TTL, "NXM_NX_IP_TTL",
+        0, NULL,
     }, {
         MFF_IP_FRAG, "ip_frag", NULL,
         1, 2,
@@ -247,7 +265,8 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFS_FRAG,
         MFP_IP_ANY,
         false,
-        NXM_NX_IP_FRAG, "NXM_NX_IP_FRAG"
+        NXM_NX_IP_FRAG, "NXM_NX_IP_FRAG",
+        0, NULL,
     },
 
     {
@@ -258,6 +277,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_ARP,
         false,
         NXM_OF_ARP_OP, "NXM_OF_ARP_OP",
+        OXM_OF_ARP_OP, "OXM_OF_ARP_OP",
     }, {
         MFF_ARP_SPA, "arp_spa", NULL,
         MF_FIELD_SIZES(be32),
@@ -266,6 +286,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_ARP,
         false,
         NXM_OF_ARP_SPA, "NXM_OF_ARP_SPA",
+        OXM_OF_ARP_SPA, "OXM_OF_ARP_SPA",
     }, {
         MFF_ARP_TPA, "arp_tpa", NULL,
         MF_FIELD_SIZES(be32),
@@ -274,6 +295,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_ARP,
         false,
         NXM_OF_ARP_TPA, "NXM_OF_ARP_TPA",
+        OXM_OF_ARP_TPA, "OXM_OF_ARP_TPA",
     }, {
         MFF_ARP_SHA, "arp_sha", NULL,
         MF_FIELD_SIZES(mac),
@@ -282,6 +304,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_ARP,
         false,
         NXM_NX_ARP_SHA, "NXM_NX_ARP_SHA",
+        OXM_OF_ARP_SHA, "OXM_OF_ARP_SHA",
     }, {
         MFF_ARP_THA, "arp_tha", NULL,
         MF_FIELD_SIZES(mac),
@@ -290,6 +313,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_ARP,
         false,
         NXM_NX_ARP_THA, "NXM_NX_ARP_THA",
+        OXM_OF_ARP_THA, "OXM_OF_ARP_THA",
     },
 
     /* ## -- ## */
@@ -304,6 +328,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_TCP,
         true,
         NXM_OF_TCP_SRC, "NXM_OF_TCP_SRC",
+        OXM_OF_TCP_SRC, "OXM_OF_TCP_SRC",
     }, {
         MFF_TCP_DST, "tcp_dst", "tp_dst",
         MF_FIELD_SIZES(be16),
@@ -312,6 +337,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_TCP,
         true,
         NXM_OF_TCP_DST, "NXM_OF_TCP_DST",
+        OXM_OF_TCP_DST, "OXM_OF_TCP_DST",
     },
 
     {
@@ -322,6 +348,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_UDP,
         true,
         NXM_OF_UDP_SRC, "NXM_OF_UDP_SRC",
+        OXM_OF_UDP_SRC, "OXM_OF_UDP_SRC",
     }, {
         MFF_UDP_DST, "udp_dst", NULL,
         MF_FIELD_SIZES(be16),
@@ -330,6 +357,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_UDP,
         true,
         NXM_OF_UDP_DST, "NXM_OF_UDP_DST",
+        OXM_OF_UDP_DST, "OXM_OF_UDP_DST",
     },
 
     {
@@ -340,6 +368,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_ICMPV4,
         false,
         NXM_OF_ICMP_TYPE, "NXM_OF_ICMP_TYPE",
+        OXM_OF_ICMPV4_TYPE, "OXM_OF_ICMPV4_TYPE",
     }, {
         MFF_ICMPV4_CODE, "icmp_code", NULL,
         MF_FIELD_SIZES(u8),
@@ -348,6 +377,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_ICMPV4,
         false,
         NXM_OF_ICMP_CODE, "NXM_OF_ICMP_CODE",
+        OXM_OF_ICMPV4_CODE, "OXM_OF_ICMPV4_CODE",
     },
 
     {
@@ -358,6 +388,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_ICMPV6,
         false,
         NXM_NX_ICMPV6_TYPE, "NXM_NX_ICMPV6_TYPE",
+        OXM_OF_ICMPV6_TYPE, "OXM_OF_ICMPV6_TYPE",
     }, {
         MFF_ICMPV6_CODE, "icmpv6_code", NULL,
         MF_FIELD_SIZES(u8),
@@ -366,6 +397,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_ICMPV6,
         false,
         NXM_NX_ICMPV6_CODE, "NXM_NX_ICMPV6_CODE",
+        OXM_OF_ICMPV6_CODE, "OXM_OF_ICMPV6_CODE",
     },
 
     /* ## ---- ## */
@@ -375,11 +407,12 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
     {
         MFF_ND_TARGET, "nd_target", NULL,
         MF_FIELD_SIZES(ipv6),
-        MFM_NONE, FWW_ND_TARGET,
+        MFM_CIDR, 0,
         MFS_IPV6,
         MFP_ND,
         false,
         NXM_NX_ND_TARGET, "NXM_NX_ND_TARGET",
+        OXM_OF_IPV6_ND_TARGET, "OXM_OF_IPV6_ND_TARGET",
     }, {
         MFF_ND_SLL, "nd_sll", NULL,
         MF_FIELD_SIZES(mac),
@@ -388,6 +421,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_ND_SOLICIT,
         false,
         NXM_NX_ND_SLL, "NXM_NX_ND_SLL",
+        OXM_OF_IPV6_ND_SLL, "OXM_OF_IPV6_ND_SLL",
     }, {
         MFF_ND_TLL, "nd_tll", NULL,
         MF_FIELD_SIZES(mac),
@@ -396,6 +430,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_ND_ADVERT,
         false,
         NXM_NX_ND_TLL, "NXM_NX_ND_TLL",
+        OXM_OF_IPV6_ND_TLL, "OXM_OF_IPV6_ND_TLL",
     }
 };
 
@@ -518,7 +553,6 @@ mf_is_all_wild(const struct mf_field *mf, const struct flow_wildcards *wc)
     case MFF_ARP_OP:
     case MFF_ARP_SHA:
     case MFF_ARP_THA:
-    case MFF_ND_TARGET:
     case MFF_ND_SLL:
     case MFF_ND_TLL:
         assert(mf->fww_bit != 0);
@@ -577,6 +611,9 @@ mf_is_all_wild(const struct mf_field *mf, const struct flow_wildcards *wc)
     case MFF_IPV6_DST:
         return ipv6_mask_is_any(&wc->ipv6_dst_mask);
 
+    case MFF_ND_TARGET:
+        return ipv6_mask_is_any(&wc->nd_target_mask);
+
     case MFF_IP_FRAG:
         return !(wc->nw_frag_mask & FLOW_NW_FRAG_MASK);
 
@@ -624,7 +661,6 @@ mf_get_mask(const struct mf_field *mf, const struct flow_wildcards *wc,
     case MFF_ARP_OP:
     case MFF_ARP_SHA:
     case MFF_ARP_THA:
-    case MFF_ND_TARGET:
     case MFF_ND_SLL:
     case MFF_ND_TLL:
         assert(mf->fww_bit != 0);
@@ -692,6 +728,10 @@ mf_get_mask(const struct mf_field *mf, const struct flow_wildcards *wc,
         break;
     case MFF_IPV6_DST:
         mask->ipv6 = wc->ipv6_dst_mask;
+        break;
+
+    case MFF_ND_TARGET:
+        mask->ipv6 = wc->nd_target_mask;
         break;
 
     case MFF_IP_FRAG:
@@ -1589,7 +1629,7 @@ mf_set_wild(const struct mf_field *mf, struct cls_rule *rule)
         break;
 
     case MFF_ND_TARGET:
-        rule->wc.wildcards |= FWW_ND_TARGET;
+        memset(&rule->wc.nd_target_mask, 0, sizeof rule->wc.nd_target_mask);
         memset(&rule->flow.nd_target, 0, sizeof rule->flow.nd_target);
         break;
 
@@ -1641,7 +1681,6 @@ mf_set(const struct mf_field *mf,
     case MFF_ICMPV4_CODE:
     case MFF_ICMPV6_TYPE:
     case MFF_ICMPV6_CODE:
-    case MFF_ND_TARGET:
     case MFF_ND_SLL:
     case MFF_ND_TLL:
         NOT_REACHED();
@@ -1705,6 +1744,10 @@ mf_set(const struct mf_field *mf,
 
     case MFF_IPV6_DST:
         cls_rule_set_ipv6_dst_masked(rule, &value->ipv6, &mask->ipv6);
+        break;
+
+    case MFF_ND_TARGET:
+        cls_rule_set_nd_target_masked(rule, &value->ipv6, &mask->ipv6);
         break;
 
     case MFF_IP_FRAG:
@@ -2241,25 +2284,48 @@ mf_format(const struct mf_field *mf,
     }
 }
 
-/* Makes a subfield starting at bit offset 'ofs' and continuing for 'n_bits' in
- * 'rule''s field 'mf' exactly match the 'n_bits' least-significant bits of
- * 'x'.
+/* Makes subfield 'sf' within 'rule' exactly match the 'sf->n_bits'
+ * least-significant bits in 'x'.
  *
- * Example: suppose that 'mf' is originally the following 2-byte field in
- * 'rule':
+ * See mf_set_subfield() for an example.
+ *
+ * The difference between this function and mf_set_subfield() is that the
+ * latter function can only handle subfields up to 64 bits wide, whereas this
+ * one handles the general case.  On the other hand, mf_set_subfield() is
+ * arguably easier to use. */
+void
+mf_write_subfield(const struct mf_subfield *sf, const union mf_subvalue *x,
+                  struct cls_rule *rule)
+{
+    const struct mf_field *field = sf->field;
+    union mf_value value, mask;
+
+    mf_get(field, rule, &value, &mask);
+    bitwise_copy(x, sizeof *x, 0, &value, field->n_bytes, sf->ofs, sf->n_bits);
+    bitwise_one (                 &mask,  field->n_bytes, sf->ofs, sf->n_bits);
+    mf_set(field, &value, &mask, rule);
+}
+
+/* Makes subfield 'sf' within 'rule' exactly match the 'sf->n_bits'
+ * least-significant bits of 'x'.
+ *
+ * Example: suppose that 'sf->field' is originally the following 2-byte field
+ * in 'rule':
  *
  *     value == 0xe00a == 2#1110000000001010
  *      mask == 0xfc3f == 2#1111110000111111
  *
- * The call mf_set_subfield(mf, 0x55, 8, 7, rule) would have the following
- * effect (note that 0x55 is 2#1010101):
+ * The call mf_set_subfield(sf, 0x55, 8, 7, rule), where sf->ofs == 8 and
+ * sf->n_bits == 7 would have the following effect (note that 0x55 is
+ * 2#1010101):
  *
  *     value == 0xd50a == 2#1101010100001010
  *      mask == 0xff3f == 2#1111111100111111
+ *                           ^^^^^^^ affected bits
  *
  * The caller is responsible for ensuring that the result will be a valid
- * wildcard pattern for 'mf'.  The caller is responsible for ensuring that
- * 'rule' meets 'mf''s prerequisites. */
+ * wildcard pattern for 'sf->field'.  The caller is responsible for ensuring
+ * that 'rule' meets 'sf->field''s prerequisites. */
 void
 mf_set_subfield(const struct mf_subfield *sf, uint64_t x,
                 struct cls_rule *rule)
@@ -2312,6 +2378,22 @@ mf_set_subfield_value(const struct mf_subfield *sf, uint64_t x,
         bitwise_put(x, &value, field->n_bytes, ofs, n_bits);
         mf_set_flow_value(field, &value, flow);
     }
+}
+
+/* Initializes 'x' to the value of 'sf' within 'flow'.  'sf' must be valid for
+ * reading 'flow', e.g. as checked by mf_check_src(). */
+void
+mf_read_subfield(const struct mf_subfield *sf, const struct flow *flow,
+                 union mf_subvalue *x)
+{
+    union mf_value value;
+
+    mf_get_value(sf->field, flow, &value);
+
+    memset(x, 0, sizeof *x);
+    bitwise_copy(&value, sf->field->n_bytes, sf->ofs,
+                 x, sizeof *x, 0,
+                 sf->n_bits);
 }
 
 /* Returns the value of 'sf' within 'flow'.  'sf' must be valid for reading

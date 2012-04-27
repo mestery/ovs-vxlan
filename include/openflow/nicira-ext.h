@@ -787,6 +787,9 @@ enum nx_mp_algorithm {
  *     field[ofs:ofs+n_bits-1].  Actions are executed in the same order as the
  *     flow_mod_specs.
  *
+ *     A single NXAST_REG_LOAD action writes no more than 64 bits, so n_bits
+ *     greater than 64 yields multiple NXAST_REG_LOAD actions.
+ *
  * The flow_mod_spec destination spec for 'dst' of 2 (when 'src' is 0) is
  * empty.  It has the following meaning:
  *
@@ -1634,8 +1637,10 @@ OFP_ASSERT(sizeof(struct nx_action_output_reg) == 24);
  *
  * Format: 128-bit IPv6 address.
  *
- * Masking: Not maskable. */
-#define NXM_NX_ND_TARGET   NXM_HEADER  (0x0001, 23, 16)
+ * Masking: Only CIDR masks are allowed, that is, masks that consist of N
+ *   high-order bits set to 1 and the other 128-N bits set to 0. */
+#define NXM_NX_ND_TARGET     NXM_HEADER    (0x0001, 23, 16)
+#define NXM_NX_ND_TARGET_W   NXM_HEADER_W  (0x0001, 23, 16)
 
 /* The source link-layer address option in an IPv6 Neighbor Discovery
  * message.
