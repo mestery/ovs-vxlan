@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -513,42 +513,6 @@ struct ofp_error_msg {
                                  on the type and code. */
 };
 OFP_ASSERT(sizeof(struct ofp_error_msg) == 12);
-
-enum ofp_stats_types {
-    /* Description of this OpenFlow switch.
-     * The request is struct ofp_stats_msg.
-     * The reply is struct ofp_desc_stats. */
-    OFPST_DESC,
-
-    /* Individual flow statistics.
-     * The request is struct ofp_flow_stats_request.
-     * The reply body is an array of struct ofp_flow_stats. */
-    OFPST_FLOW,
-
-    /* Aggregate flow statistics.
-     * The request is struct ofp_flow_stats_request.
-     * The reply is struct ofp_aggregate_stats_reply. */
-    OFPST_AGGREGATE,
-
-    /* Flow table statistics.
-     * The request is struct ofp_stats_msg.
-     * The reply body is an array of struct ofp_table_stats. */
-    OFPST_TABLE,
-
-    /* Physical port statistics.
-     * The request is struct ofp_port_stats_request.
-     * The reply body is an array of struct ofp_port_stats. */
-    OFPST_PORT,
-
-    /* Queue statistics for a port.
-     * The request body is struct ofp_queue_stats_request.
-     * The reply body is an array of struct ofp_queue_stats. */
-    OFPST_QUEUE,
-
-    /* Vendor extension.
-     * The request and reply begin with "struct ofp_vendor_stats". */
-    OFPST_VENDOR = 0xffff
-};
 
 /* Statistics request or reply message. */
 struct ofp_stats_msg {

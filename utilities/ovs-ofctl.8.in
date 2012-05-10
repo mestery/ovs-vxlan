@@ -66,6 +66,12 @@ associated with that device will be printed.  \fInetdev\fR can be an
 OpenFlow assigned port number or device name, e.g. \fBeth0\fR.
 .
 .TP
+\fBdump\-ports\-desc \fIswitch\fR
+Prints to the console detailed information about network devices
+associated with \fIswitch\fR (version 1.7 or later).  This is a subset
+of the information provided by the \fBshow\fR command.
+.
+.TP
 \fBmod\-port \fIswitch\fR \fInetdev\fR \fIaction\fR
 Modify characteristics of an interface monitored by \fIswitch\fR.  
 \fInetdev\fR can be referred to by its OpenFlow assigned port number or 
@@ -886,6 +892,10 @@ processing.
 Does nothing at all.  Any number of bytes represented as hex digits
 \fIhh\fR may be included.  Pairs of hex digits may be separated by
 periods for readability.
+The \fBnote\fR action's format doesn't include an exact length for its
+payload, so the provided bytes will be padded on the right by enough
+bytes with value 0 to make the total number 6 more than a multiple of
+8.
 .
 .IP "\fBmove:\fIsrc\fB[\fIstart\fB..\fIend\fB]\->\fIdst\fB[\fIstart\fB..\fIend\fB]\fR"
 Copies the named bits from field \fIsrc\fR to field \fIdst\fR.
@@ -1098,6 +1108,13 @@ others.  \fIvalue\fR is a number between 0 and 65535, inclusive.  A higher
 have priority over an entry containing wildcards, so it has an implicit 
 priority value of 65535.  When adding a flow, if the field is not specified, 
 the flow's priority will default to 32768.
+.IP
+OpenFlow leaves behavior undefined when two or more flows with the
+same priority can match a single packet.  Some users expect
+``sensible'' behavior, such as more specific flows taking precedence
+over less specific flows, but OpenFlow does not specify this and Open
+vSwitch does not implement it.  Users should therefore take care to
+use priorities to ensure the behavior that they expect.
 .
 .PP
 The \fBadd\-flow\fR, \fBadd\-flows\fR, and \fBmod\-flows\fR commands

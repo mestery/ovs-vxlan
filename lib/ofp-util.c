@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -587,6 +587,10 @@ ofputil_decode_ofpst_request(const struct ofp_header *oh, size_t length,
           OFPST_QUEUE, "OFPST_QUEUE request",
           sizeof(struct ofp_queue_stats_request), 0 },
 
+        { OFPUTIL_OFPST_PORT_DESC_REQUEST, OFP10_VERSION,
+          OFPST_PORT_DESC, "OFPST_PORT_DESC request",
+          sizeof(struct ofp_stats_msg), 0 },
+
         { 0, 0,
           OFPST_VENDOR, "OFPST_VENDOR request",
           sizeof(struct ofp_vendor_stats_msg), 1 },
@@ -643,6 +647,10 @@ ofputil_decode_ofpst_reply(const struct ofp_header *oh, size_t length,
         { OFPUTIL_OFPST_QUEUE_REPLY, OFP10_VERSION,
           OFPST_QUEUE, "OFPST_QUEUE reply",
           sizeof(struct ofp_stats_msg), sizeof(struct ofp_queue_stats) },
+
+        { OFPUTIL_OFPST_PORT_DESC_REPLY, OFP10_VERSION,
+          OFPST_PORT_DESC, "OFPST_PORT_DESC reply",
+          sizeof(struct ofp_stats_msg), sizeof(struct ofp10_phy_port) },
 
         { 0, 0,
           OFPST_VENDOR, "OFPST_VENDOR reply",
@@ -2224,7 +2232,7 @@ ofputil_decode_packet_out(struct ofputil_packet_out *po,
     po->buffer_id = ntohl(opo->buffer_id);
     po->in_port = ntohs(opo->in_port);
     if (po->in_port >= OFPP_MAX && po->in_port != OFPP_LOCAL
-        && po->in_port != OFPP_NONE) {
+        && po->in_port != OFPP_NONE && po->in_port != OFPP_CONTROLLER) {
         VLOG_WARN_RL(&bad_ofmsg_rl, "packet-out has bad input port %#"PRIx16,
                      po->in_port);
         return OFPERR_NXBRC_BAD_IN_PORT;
@@ -2363,17 +2371,11 @@ ofputil_decode_ofp11_port(struct ofputil_phy_port *pp,
     return 0;
 }
 
-static int
-ofputil_pull_phy_port(uint8_t ofp_version, struct ofpbuf *b,
-                      struct ofputil_phy_port *pp)
+static size_t
+ofputil_get_phy_port_size(uint8_t ofp_version)
 {
-    if (ofp_version == OFP10_VERSION) {
-        const struct ofp10_phy_port *opp = ofpbuf_try_pull(b, sizeof *opp);
-        return opp ? ofputil_decode_ofp10_phy_port(pp, opp) : EOF;
-    } else {
-        const struct ofp11_port *op = ofpbuf_try_pull(b, sizeof *op);
-        return op ? ofputil_decode_ofp11_port(pp, op) : EOF;
-    }
+    return ofp_version == OFP10_VERSION ? sizeof(struct ofp10_phy_port)
+                                        : sizeof(struct ofp11_port);
 }
 
 static void
@@ -2433,6 +2435,24 @@ ofputil_put_phy_port(uint8_t ofp_version, const struct ofputil_phy_port *pp,
             op = ofpbuf_put_uninit(b, sizeof *op);
             ofputil_encode_ofp11_port(pp, op);
         }
+    }
+}
+
+void
+ofputil_append_port_desc_stats_reply(uint8_t ofp_version,
+                                     const struct ofputil_phy_port *pp,
+                                     struct list *replies)
+{
+    if (ofp_version == OFP10_VERSION) {
+        struct ofp10_phy_port *opp;
+
+        opp = ofputil_append_stats_reply(sizeof *opp, replies);
+        ofputil_encode_ofp10_phy_port(pp, opp);
+    } else {
+        struct ofp11_port *op;
+
+        op = ofputil_append_stats_reply(sizeof *op, replies);
+        ofputil_encode_ofp11_port(pp, op);
     }
 }
 
@@ -2515,7 +2535,7 @@ decode_action_bits(ovs_be32 of_actions,
 /* Decodes an OpenFlow 1.0 or 1.1 "switch_features" structure 'osf' into an
  * abstract representation in '*features'.  Initializes '*b' to iterate over
  * the OpenFlow port structures following 'osf' with later calls to
- * ofputil_pull_switch_features_port().  Returns 0 if successful, otherwise an
+ * ofputil_pull_phy_port().  Returns 0 if successful, otherwise an
  * OFPERR_* value.  */
 enum ofperr
 ofputil_decode_switch_features(const struct ofp_switch_features *osf,
@@ -2524,27 +2544,23 @@ ofputil_decode_switch_features(const struct ofp_switch_features *osf,
 {
     ofpbuf_use_const(b, osf, ntohs(osf->header.length));
     ofpbuf_pull(b, sizeof *osf);
-    b->l2 = (struct ofputil_switch_features *) osf;
 
     features->datapath_id = ntohll(osf->datapath_id);
     features->n_buffers = ntohl(osf->n_buffers);
     features->n_tables = osf->n_tables;
 
     features->capabilities = ntohl(osf->capabilities) & OFPC_COMMON;
-    if (osf->header.version == OFP10_VERSION) {
-        if (b->size % sizeof(struct ofp10_phy_port)) {
-            return OFPERR_OFPBRC_BAD_LEN;
-        }
 
+    if (b->size % ofputil_get_phy_port_size(osf->header.version)) {
+        return OFPERR_OFPBRC_BAD_LEN;
+    }
+
+    if (osf->header.version == OFP10_VERSION) {
         if (osf->capabilities & htonl(OFPC10_STP)) {
             features->capabilities |= OFPUTIL_C_STP;
         }
         features->actions = decode_action_bits(osf->actions, of10_action_bits);
     } else if (osf->header.version == OFP11_VERSION) {
-        if (b->size % sizeof(struct ofp11_port)) {
-            return OFPERR_OFPBRC_BAD_LEN;
-        }
-
         if (osf->capabilities & htonl(OFPC11_GROUP_STATS)) {
             features->capabilities |= OFPUTIL_C_GROUP_STATS;
         }
@@ -2556,31 +2572,35 @@ ofputil_decode_switch_features(const struct ofp_switch_features *osf,
     return 0;
 }
 
-/* Given a buffer 'b' that was initialized by a previous successful call to
- * ofputil_decode_switch_features(), tries to decode an OpenFlow port structure
- * following the main switch features information.  If successful, initializes
- * '*pp' with an abstract representation of the port and returns 0.  If no
- * ports remained to be decoded, returns EOF.  On an error, returns a positive
- * OFPERR_* value.  */
-int
-ofputil_pull_switch_features_port(struct ofpbuf *b,
-                                  struct ofputil_phy_port *pp)
+/* Returns true if the maximum number of ports are in 'osf'. */
+static bool
+max_ports_in_features(const struct ofp_switch_features *osf)
 {
-    const struct ofp_switch_features *osf = b->l2;
-    return ofputil_pull_phy_port(osf->header.version, b, pp);
+    size_t pp_size = ofputil_get_phy_port_size(osf->header.version);
+    return ntohs(osf->header.length) + pp_size > UINT16_MAX;
 }
 
-/* Returns the number of OpenFlow port structures that follow the main switch
- * features information in '*osf'.  The return value is only guaranteed to be
- * accurate if '*osf' is well-formed, that is, if
- * ofputil_decode_switch_features() can process '*osf' successfully. */
-size_t
-ofputil_count_phy_ports(const struct ofp_switch_features *osf)
+/* Given a buffer 'b' that contains a Features Reply message, checks if
+ * it contains the maximum number of ports that will fit.  If so, it
+ * returns true and removes the ports from the message.  The caller
+ * should then send an OFPST_PORT_DESC stats request to get the ports,
+ * since the switch may have more ports than could be represented in the
+ * Features Reply.  Otherwise, returns false.
+ */
+bool
+ofputil_switch_features_ports_trunc(struct ofpbuf *b)
 {
-    size_t ports_len = ntohs(osf->header.length) - sizeof *osf;
-    return (osf->header.version == OFP10_VERSION
-            ? ports_len / sizeof(struct ofp10_phy_port)
-            : ports_len / sizeof(struct ofp11_port));
+    struct ofp_switch_features *osf = b->data;
+
+    if (max_ports_in_features(osf)) {
+        /* Remove all the ports. */
+        b->size = sizeof(*osf);
+        update_openflow_length(b);
+
+        return true;
+    }
+
+    return false;
 }
 
 static ovs_be32
@@ -3362,6 +3382,31 @@ ofputil_format_port(uint16_t port, struct ds *s)
     ds_put_cstr(s, name);
 }
 
+/* Given a buffer 'b' that contains an array of OpenFlow ports of type
+ * 'ofp_version', tries to pull the first element from the array.  If
+ * successful, initializes '*pp' with an abstract representation of the
+ * port and returns 0.  If no ports remain to be decoded, returns EOF.
+ * On an error, returns a positive OFPERR_* value. */
+int
+ofputil_pull_phy_port(uint8_t ofp_version, struct ofpbuf *b,
+                      struct ofputil_phy_port *pp)
+{
+    if (ofp_version == OFP10_VERSION) {
+        const struct ofp10_phy_port *opp = ofpbuf_try_pull(b, sizeof *opp);
+        return opp ? ofputil_decode_ofp10_phy_port(pp, opp) : EOF;
+    } else {
+        const struct ofp11_port *op = ofpbuf_try_pull(b, sizeof *op);
+        return op ? ofputil_decode_ofp11_port(pp, op) : EOF;
+    }
+}
+
+/* Given a buffer 'b' that contains an array of OpenFlow ports of type
+ * 'ofp_version', returns the number of elements. */
+size_t ofputil_count_phy_ports(uint8_t ofp_version, struct ofpbuf *b)
+{
+    return b->size / ofputil_get_phy_port_size(ofp_version);
+}
+
 static enum ofperr
 check_resubmit_table(const struct nx_action_resubmit *nar)
 {
@@ -3926,7 +3971,8 @@ ofputil_parse_key_value(char **stringp, char **keyp, char **valuep)
         for (value_len = 0; level > 0; value_len++) {
             switch (value[value_len]) {
             case '\0':
-                ovs_fatal(0, "unbalanced parentheses in argument to %s", key);
+                level = 0;
+                break;
 
             case '(':
                 level++;

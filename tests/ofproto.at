@@ -38,6 +38,21 @@ AT_CLEANUP
 
 dnl This is really bare-bones.
 dnl It at least checks request and reply serialization and deserialization.
+AT_SETUP([ofproto - port-desc stats])
+OVS_VSWITCHD_START
+AT_CHECK([ovs-ofctl -vwarn dump-ports-desc br0], [0], [stdout])
+AT_CHECK([STRIP_XIDS stdout], [0], [dnl
+OFPST_PORT_DESC reply:
+ LOCAL(br0): addr:aa:55:aa:55:00:00
+     config:     PORT_DOWN
+     state:      LINK_DOWN
+     speed: 100 Mbps now, 100 Mbps max
+])
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
+dnl This is really bare-bones.
+dnl It at least checks request and reply serialization and deserialization.
 AT_SETUP([ofproto - queue stats])
 OVS_VSWITCHD_START
 AT_CHECK([ovs-ofctl -vANY:ANY:WARN queue-stats br0], [0], [stdout])
@@ -214,12 +229,14 @@ OVS_VSWITCHD_START
   0: classifier: wild=0x3fffff, max=1000000, active=0
                lookup=0, matched=0"
  x=1
- while test $x -lt 255; do
+ while test $x -lt 254; do
    printf "  %d: %-8s: wild=0x3fffff, max=1000000, active=0
                lookup=0, matched=0
 " $x table$x
    x=`expr $x + 1`
- done) > expout
+ done
+ echo "  254: table254: wild=0x3fffff, max=1000000, active=2
+               lookup=0, matched=0") > expout
 AT_CHECK([ovs-ofctl dump-tables br0], [0], [expout])
 # Change the configuration.
 AT_CHECK(
@@ -302,18 +319,18 @@ for in_port in 4 3 2 1; do
     ovs-ofctl add-flow br0 idle_timeout=${in_port}0,in_port=$in_port,actions=drop
 done
 AT_CHECK([ovs-ofctl dump-flows br0 | ofctl_strip | sort], [0], [dnl
- idle_timeout=10,in_port=1 actions=drop
- idle_timeout=20,in_port=2 actions=drop
- idle_timeout=30,in_port=3 actions=drop
- idle_timeout=40,in_port=4 actions=drop
+ idle_timeout=10, in_port=1 actions=drop
+ idle_timeout=20, in_port=2 actions=drop
+ idle_timeout=30, in_port=3 actions=drop
+ idle_timeout=40, in_port=4 actions=drop
 NXST_FLOW reply:
 ])
 # Adding another flow will cause the one that expires soonest to be evicted.
 AT_CHECK([ovs-ofctl add-flow br0 in_port=5,actions=drop])
 AT_CHECK([ovs-ofctl dump-flows br0 | ofctl_strip | sort], [0], [dnl
- idle_timeout=20,in_port=2 actions=drop
- idle_timeout=30,in_port=3 actions=drop
- idle_timeout=40,in_port=4 actions=drop
+ idle_timeout=20, in_port=2 actions=drop
+ idle_timeout=30, in_port=3 actions=drop
+ idle_timeout=40, in_port=4 actions=drop
  in_port=5 actions=drop
 NXST_FLOW reply:
 ])
@@ -323,7 +340,7 @@ AT_CHECK([ovs-ofctl mod-flows br0 in_port=6,actions=drop])
 AT_CHECK([ovs-ofctl add-flow br0 in_port=4,actions=normal])
 AT_CHECK([ovs-ofctl mod-flows br0 in_port=3,actions=output:1])
 AT_CHECK([ovs-ofctl dump-flows br0 | ofctl_strip | sort], [0], [dnl
- idle_timeout=30,in_port=3 actions=output:1
+ idle_timeout=30, in_port=3 actions=output:1
  in_port=4 actions=NORMAL
  in_port=5 actions=drop
  in_port=6 actions=drop
@@ -365,10 +382,10 @@ idle_timeout=30 in_port=1 dl_src=00:22:33:44:55:66 actions=drop
 idle_timeout=40 in_port=1 dl_src=00:33:44:55:66:77 actions=drop
 EOF
 AT_CHECK([ovs-ofctl dump-flows br0 | ofctl_strip | sort], [0], [dnl
- idle_timeout=10,in_port=2,dl_src=00:44:55:66:77:88 actions=drop
- idle_timeout=20,in_port=1,dl_src=00:11:22:33:44:55 actions=drop
- idle_timeout=30,in_port=1,dl_src=00:22:33:44:55:66 actions=drop
- idle_timeout=40,in_port=1,dl_src=00:33:44:55:66:77 actions=drop
+ idle_timeout=10, in_port=2,dl_src=00:44:55:66:77:88 actions=drop
+ idle_timeout=20, in_port=1,dl_src=00:11:22:33:44:55 actions=drop
+ idle_timeout=30, in_port=1,dl_src=00:22:33:44:55:66 actions=drop
+ idle_timeout=40, in_port=1,dl_src=00:33:44:55:66:77 actions=drop
 NXST_FLOW reply:
 ])
 # Adding another flow will cause the one that expires soonest within
@@ -377,9 +394,9 @@ NXST_FLOW reply:
 # (which is what makes the test interesting):
 AT_CHECK([ovs-ofctl add-flow br0 in_port=2,dl_src=00:55:66:77:88:99,actions=drop])
 AT_CHECK([ovs-ofctl dump-flows br0 | ofctl_strip | sort], [0], [dnl
- idle_timeout=10,in_port=2,dl_src=00:44:55:66:77:88 actions=drop
- idle_timeout=30,in_port=1,dl_src=00:22:33:44:55:66 actions=drop
- idle_timeout=40,in_port=1,dl_src=00:33:44:55:66:77 actions=drop
+ idle_timeout=10, in_port=2,dl_src=00:44:55:66:77:88 actions=drop
+ idle_timeout=30, in_port=1,dl_src=00:22:33:44:55:66 actions=drop
+ idle_timeout=40, in_port=1,dl_src=00:33:44:55:66:77 actions=drop
  in_port=2,dl_src=00:55:66:77:88:99 actions=drop
 NXST_FLOW reply:
 ])
@@ -392,12 +409,12 @@ idle_timeout=60 in_port=2 dl_src=00:77:88:99:aa:bb actions=drop
 idle_timeout=70 in_port=2 dl_src=00:88:99:aa:bb:cc actions=drop
 EOF
 AT_CHECK([ovs-ofctl dump-flows br0 | ofctl_strip | sort], [0], [dnl
- idle_timeout=10,in_port=2,dl_src=00:44:55:66:77:88 actions=drop
- idle_timeout=30,in_port=1,dl_src=00:22:33:44:55:66 actions=drop
- idle_timeout=40,in_port=1,dl_src=00:33:44:55:66:77 actions=drop
- idle_timeout=50,in_port=2,dl_src=00:66:77:88:99:aa actions=drop
- idle_timeout=60,in_port=2,dl_src=00:77:88:99:aa:bb actions=drop
- idle_timeout=70,in_port=2,dl_src=00:88:99:aa:bb:cc actions=drop
+ idle_timeout=10, in_port=2,dl_src=00:44:55:66:77:88 actions=drop
+ idle_timeout=30, in_port=1,dl_src=00:22:33:44:55:66 actions=drop
+ idle_timeout=40, in_port=1,dl_src=00:33:44:55:66:77 actions=drop
+ idle_timeout=50, in_port=2,dl_src=00:66:77:88:99:aa actions=drop
+ idle_timeout=60, in_port=2,dl_src=00:77:88:99:aa:bb actions=drop
+ idle_timeout=70, in_port=2,dl_src=00:88:99:aa:bb:cc actions=drop
  in_port=2,dl_src=00:55:66:77:88:99 actions=drop
 NXST_FLOW reply:
 ])
@@ -405,12 +422,12 @@ NXST_FLOW reply:
 # to be evicted.
 AT_CHECK([ovs-ofctl add-flow br0 'idle_timeout=80 in_port=2 dl_src=00:99:aa:bb:cc:dd actions=drop'])
 AT_CHECK([ovs-ofctl dump-flows br0 | ofctl_strip | sort], [0], [dnl
- idle_timeout=30,in_port=1,dl_src=00:22:33:44:55:66 actions=drop
- idle_timeout=40,in_port=1,dl_src=00:33:44:55:66:77 actions=drop
- idle_timeout=50,in_port=2,dl_src=00:66:77:88:99:aa actions=drop
- idle_timeout=60,in_port=2,dl_src=00:77:88:99:aa:bb actions=drop
- idle_timeout=70,in_port=2,dl_src=00:88:99:aa:bb:cc actions=drop
- idle_timeout=80,in_port=2,dl_src=00:99:aa:bb:cc:dd actions=drop
+ idle_timeout=30, in_port=1,dl_src=00:22:33:44:55:66 actions=drop
+ idle_timeout=40, in_port=1,dl_src=00:33:44:55:66:77 actions=drop
+ idle_timeout=50, in_port=2,dl_src=00:66:77:88:99:aa actions=drop
+ idle_timeout=60, in_port=2,dl_src=00:77:88:99:aa:bb actions=drop
+ idle_timeout=70, in_port=2,dl_src=00:88:99:aa:bb:cc actions=drop
+ idle_timeout=80, in_port=2,dl_src=00:99:aa:bb:cc:dd actions=drop
  in_port=2,dl_src=00:55:66:77:88:99 actions=drop
 NXST_FLOW reply:
 ])
@@ -418,9 +435,9 @@ NXST_FLOW reply:
 # overall to be evicted.
 AT_CHECK([ovs-vsctl set Flow_Table evict flow-limit=4])
 AT_CHECK([ovs-ofctl dump-flows br0 | ofctl_strip | sort], [0], [dnl
- idle_timeout=60,in_port=2,dl_src=00:77:88:99:aa:bb actions=drop
- idle_timeout=70,in_port=2,dl_src=00:88:99:aa:bb:cc actions=drop
- idle_timeout=80,in_port=2,dl_src=00:99:aa:bb:cc:dd actions=drop
+ idle_timeout=60, in_port=2,dl_src=00:77:88:99:aa:bb actions=drop
+ idle_timeout=70, in_port=2,dl_src=00:88:99:aa:bb:cc actions=drop
+ idle_timeout=80, in_port=2,dl_src=00:99:aa:bb:cc:dd actions=drop
  in_port=2,dl_src=00:55:66:77:88:99 actions=drop
 NXST_FLOW reply:
 ])
@@ -499,7 +516,7 @@ s/00:0.$/00:0x/' < monitor.log]],
 # It's a service connection so initially there should be no async messages.
 check_async 1
 
-# Set miss_send_len to 128, turning on packet-outs for our service connection.
+# Set miss_send_len to 128, turning on packet-ins for our service connection.
 ovs-appctl -t ovs-ofctl ofctl/send 0109000c0123456700000080
 check_async 2 OFPR_ACTION OFPPR_ADD OFPPR_DELETE OFPRR_DELETE
 
@@ -527,5 +544,38 @@ ovs-appctl -t ovs-ofctl ofctl/send 0104001400000002000023200000000a00000001
 check_async 7 OFPR_ACTION OFPPR_ADD
 
 ovs-appctl -t ovs-ofctl exit
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
+dnl This test checks that OFPT_PACKET_OUT accepts both OFPP_NONE (as
+dnl specified by OpenFlow 1.0) and OFPP_CONTROLLER (used by some
+dnl controllers despite the spec) as meaning a packet that was generated
+dnl by the controller.
+AT_SETUP([ofproto - packet-out from controller])
+OVS_VSWITCHD_START
+
+# Start a monitor listening for packet-ins.
+AT_CHECK([ovs-ofctl -P openflow10 monitor br0 --detach --no-chdir --pidfile])
+ovs-appctl -t ovs-ofctl ofctl/send 0109000c0123456700000080
+ovs-appctl -t ovs-ofctl ofctl/barrier
+ovs-appctl -t ovs-ofctl ofctl/set-output-file monitor.log
+AT_CAPTURE_FILE([monitor.log])
+
+# Send some packet-outs with OFPP_NONE and OFPP_CONTROLLER (65533) as in_port.
+AT_CHECK([ovs-ofctl packet-out br0 none controller '0001020304050010203040501234'])
+AT_CHECK([ovs-ofctl packet-out br0 65533 controller '0001020304050010203040505678'])
+
+# Stop the monitor and check its output.
+ovs-appctl -t ovs-ofctl ofctl/barrier
+ovs-appctl -t ovs-ofctl exit
+
+AT_CHECK([sed 's/ (xid=0x[[0-9a-fA-F]]*)//' monitor.log], [0], [dnl
+OFPT_PACKET_IN: total_len=14 in_port=NONE (via action) data_len=14 (unbuffered)
+priority:0,tunnel:0,in_port:0000,tci(0) mac(00:10:20:30:40:50->00:01:02:03:04:05) type:1234 proto:0 tos:0 ttl:0 ip(0.0.0.0->0.0.0.0)
+OFPT_PACKET_IN: total_len=14 in_port=CONTROLLER (via action) data_len=14 (unbuffered)
+priority:0,tunnel:0,in_port:0000,tci(0) mac(00:10:20:30:40:50->00:01:02:03:04:05) type:5678 proto:0 tos:0 ttl:0 ip(0.0.0.0->0.0.0.0)
+OFPT_BARRIER_REPLY:
+])
+
 OVS_VSWITCHD_STOP
 AT_CLEANUP

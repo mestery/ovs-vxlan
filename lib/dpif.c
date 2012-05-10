@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -540,6 +540,9 @@ dpif_get_max_ports(const struct dpif *dpif)
 /* Returns the Netlink PID value to supply in OVS_ACTION_ATTR_USERSPACE actions
  * as the OVS_USERSPACE_ATTR_PID attribute's value, for use in flows whose
  * packets arrived on port 'port_no'.
+ *
+ * A 'port_no' of UINT16_MAX is a special case: it returns a reserved PID, not
+ * allocated to any port, that the client may use for special purposes.
  *
  * The return value is only meaningful when DPIF_UC_ACTION has been enabled in
  * the 'dpif''s listen mask.  It is allowed to change when DPIF_UC_ACTION is

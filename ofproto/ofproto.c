@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  * Copyright (c) 2010 Jean Tourrilhes - HP-Labs.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -664,8 +664,8 @@ ofproto_port_get_stp_status(struct ofproto *ofproto, uint16_t ofp_port,
 {
     struct ofport *ofport = ofproto_get_port(ofproto, ofp_port);
     if (!ofport) {
-        VLOG_WARN("%s: cannot get STP status on nonexistent port %"PRIu16,
-                  ofproto->name, ofp_port);
+        VLOG_WARN_RL(&rl, "%s: cannot get STP status on nonexistent "
+                     "port %"PRIu16, ofproto->name, ofp_port);
         return ENODEV;
     }
 
@@ -2187,6 +2187,25 @@ handle_port_stats_request(struct ofconn *ofconn,
     return 0;
 }
 
+static enum ofperr
+handle_port_desc_stats_request(struct ofconn *ofconn,
+                               const struct ofp_stats_msg *osm)
+{
+    struct ofproto *p = ofconn_get_ofproto(ofconn);
+    struct ofport *port;
+    struct list replies;
+
+    ofputil_start_stats_reply(osm, &replies);
+
+    HMAP_FOR_EACH (port, hmap_node, &p->ports) {
+        ofputil_append_port_desc_stats_reply(ofconn_get_protocol(ofconn),
+                                             &port->pp, &replies);
+    }
+
+    ofconn_send_replies(ofconn, &replies);
+    return 0;
+}
+
 static void
 calc_flow_duration__(long long int start, long long int now,
                      uint32_t *sec, uint32_t *nsec)
@@ -3309,6 +3328,9 @@ handle_openflow__(struct ofconn *ofconn, const struct ofpbuf *msg)
     case OFPUTIL_OFPST_QUEUE_REQUEST:
         return handle_queue_stats_request(ofconn, msg->data);
 
+    case OFPUTIL_OFPST_PORT_DESC_REQUEST:
+        return handle_port_desc_stats_request(ofconn, msg->data);
+
     case OFPUTIL_MSG_INVALID:
     case OFPUTIL_OFPT_HELLO:
     case OFPUTIL_OFPT_ERROR:
@@ -3326,6 +3348,7 @@ handle_openflow__(struct ofconn *ofconn, const struct ofpbuf *msg)
     case OFPUTIL_OFPST_PORT_REPLY:
     case OFPUTIL_OFPST_TABLE_REPLY:
     case OFPUTIL_OFPST_AGGREGATE_REPLY:
+    case OFPUTIL_OFPST_PORT_DESC_REPLY:
     case OFPUTIL_NXT_ROLE_REPLY:
     case OFPUTIL_NXT_FLOW_REMOVED:
     case OFPUTIL_NXT_PACKET_IN:
@@ -3874,6 +3897,7 @@ oftable_init(struct oftable *table)
 {
     memset(table, 0, sizeof *table);
     classifier_init(&table->cls);
+    table->max_flows = UINT_MAX;
 }
 
 /* Destroys 'table', including its classifier and eviction groups.

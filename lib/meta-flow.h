@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2012 Nicira Networks.
+ * Copyright (c) 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -264,6 +264,7 @@ void mf_set_value(const struct mf_field *, const union mf_value *value,
                   struct cls_rule *);
 void mf_set_flow_value(const struct mf_field *, const union mf_value *value,
                        struct flow *);
+bool mf_is_zero(const struct mf_field *, const struct flow *);
 
 void mf_get(const struct mf_field *, const struct cls_rule *,
             union mf_value *value, union mf_value *mask);

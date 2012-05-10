@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -167,6 +167,52 @@ format_odp_sample_action(struct ds *ds, const struct nlattr *attr)
     ds_put_format(ds, "))");
 }
 
+static const char *
+slow_path_reason_to_string(enum slow_path_reason bit)
+{
+    switch (bit) {
+    case SLOW_CFM:
+        return "cfm";
+    case SLOW_LACP:
+        return "lacp";
+    case SLOW_STP:
+        return "stp";
+    case SLOW_IN_BAND:
+        return "in_band";
+    case SLOW_CONTROLLER:
+        return "controller";
+    case SLOW_MATCH:
+        return "match";
+    default:
+        return NULL;
+    }
+}
+
+static void
+format_slow_path_reason(struct ds *ds, uint32_t slow)
+{
+    uint32_t bad = 0;
+
+    while (slow) {
+        uint32_t bit = rightmost_1bit(slow);
+        const char *s;
+
+        s = slow_path_reason_to_string(bit);
+        if (s) {
+            ds_put_format(ds, "%s,", s);
+        } else {
+            bad |= bit;
+        }
+
+        slow &= ~bit;
+    }
+
+    if (bad) {
+        ds_put_format(ds, "0x%"PRIx32",", bad);
+    }
+    ds_chomp(ds, ',');
+}
+
 static void
 format_odp_userspace_action(struct ds *ds, const struct nlattr *attr)
 {
@@ -186,17 +232,31 @@ format_odp_userspace_action(struct ds *ds, const struct nlattr *attr)
 
     if (a[OVS_USERSPACE_ATTR_USERDATA]) {
         uint64_t userdata = nl_attr_get_u64(a[OVS_USERSPACE_ATTR_USERDATA]);
-        struct user_action_cookie cookie;
+        union user_action_cookie cookie;
 
         memcpy(&cookie, &userdata, sizeof cookie);
 
-        if (cookie.type == USER_ACTION_COOKIE_SFLOW) {
-            ds_put_format(ds, ",sFlow,n_output=%"PRIu8","
-                          "vid=%"PRIu16",pcp=%"PRIu8",ifindex=%"PRIu32,
-                          cookie.n_output, vlan_tci_to_vid(cookie.vlan_tci),
-                          vlan_tci_to_pcp(cookie.vlan_tci), cookie.data);
-        } else {
+        switch (cookie.type) {
+        case USER_ACTION_COOKIE_SFLOW:
+            ds_put_format(ds, ",sFlow("
+                          "vid=%"PRIu16",pcp=%"PRIu8",output=%"PRIu32")",
+                          vlan_tci_to_vid(cookie.sflow.vlan_tci),
+                          vlan_tci_to_pcp(cookie.sflow.vlan_tci),
+                          cookie.sflow.output);
+            break;
+
+        case USER_ACTION_COOKIE_SLOW_PATH:
+            ds_put_cstr(ds, ",slow_path(");
+            if (cookie.slow_path.reason) {
+                format_slow_path_reason(ds, cookie.slow_path.reason);
+            }
+            ds_put_char(ds, ')');
+            break;
+
+        case USER_ACTION_COOKIE_UNSPEC:
+        default:
             ds_put_format(ds, ",userdata=0x%"PRIx64, userdata);
+            break;
         }
     }
 
@@ -333,19 +393,18 @@ parse_odp_action(const char *s, const struct shash *port_names,
 
     {
         unsigned long long int pid;
-        unsigned long long int ifindex;
+        unsigned long long int output;
         char userdata_s[32];
-        int n_output;
         int vid, pcp;
         int n = -1;
 
         if (sscanf(s, "userspace(pid=%lli)%n", &pid, &n) > 0 && n > 0) {
             odp_put_userspace_action(pid, NULL, actions);
             return n;
-        } else if (sscanf(s, "userspace(pid=%lli,sFlow,n_output=%i,vid=%i,"
-                          "pcp=%i,ifindex=%lli)%n", &pid, &n_output,
-                          &vid, &pcp, &ifindex, &n) > 0 && n > 0) {
-            struct user_action_cookie cookie;
+        } else if (sscanf(s, "userspace(pid=%lli,sFlow(vid=%i,"
+                          "pcp=%i,output=%lli))%n",
+                          &pid, &vid, &pcp, &output, &n) > 0 && n > 0) {
+            union user_action_cookie cookie;
             uint16_t tci;
 
             tci = vid | (pcp << VLAN_PCP_SHIFT);
@@ -354,15 +413,50 @@ parse_odp_action(const char *s, const struct shash *port_names,
             }
 
             cookie.type = USER_ACTION_COOKIE_SFLOW;
-            cookie.n_output = n_output;
-            cookie.vlan_tci = htons(tci);
-            cookie.data = ifindex;
+            cookie.sflow.vlan_tci = htons(tci);
+            cookie.sflow.output = output;
+            odp_put_userspace_action(pid, &cookie, actions);
+            return n;
+        } else if (sscanf(s, "userspace(pid=%lli,slow_path(%n", &pid, &n) > 0
+                   && n > 0) {
+            union user_action_cookie cookie;
+
+            cookie.type = USER_ACTION_COOKIE_SLOW_PATH;
+            cookie.slow_path.unused = 0;
+            cookie.slow_path.reason = 0;
+
+            while (s[n] != ')') {
+                uint32_t bit;
+
+                for (bit = 1; bit; bit <<= 1) {
+                    const char *reason = slow_path_reason_to_string(bit);
+                    size_t len = strlen(reason);
+
+                    if (reason
+                        && !strncmp(s + n, reason, len)
+                        && (s[n + len] == ',' || s[n + len] == ')'))
+                    {
+                        cookie.slow_path.reason |= bit;
+                        n += len + (s[n + len] == ',');
+                        break;
+                    }
+                }
+
+                if (!bit) {
+                    return -EINVAL;
+                }
+            }
+            if (s[n + 1] != ')') {
+                return -EINVAL;
+            }
+            n += 2;
+
             odp_put_userspace_action(pid, &cookie, actions);
             return n;
         } else if (sscanf(s, "userspace(pid=%lli,userdata="
                           "%31[x0123456789abcdefABCDEF])%n", &pid, userdata_s,
                           &n) > 0 && n > 0) {
-            struct user_action_cookie cookie;
+            union user_action_cookie cookie;
             uint64_t userdata;
 
             userdata = strtoull(userdata_s, NULL, 0);
@@ -1221,7 +1315,7 @@ odp_flow_key_from_flow(struct ofpbuf *buf, const struct flow *flow)
         }
     }
 
-    if (flow->in_port != OFPP_NONE) {
+    if (flow->in_port != OFPP_NONE && flow->in_port != OFPP_CONTROLLER) {
         nl_msg_put_u32(buf, OVS_KEY_ATTR_IN_PORT,
                        ofp_port_to_odp_port(flow->in_port));
     }
@@ -1774,7 +1868,7 @@ odp_key_fitness_to_string(enum odp_key_fitness fitness)
  * the start of the cookie.  (If 'cookie' is null, then the return value is not
  * meaningful.) */
 size_t
-odp_put_userspace_action(uint32_t pid, const struct user_action_cookie *cookie,
+odp_put_userspace_action(uint32_t pid, const union user_action_cookie *cookie,
                          struct ofpbuf *odp_actions)
 {
     size_t offset;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -117,27 +117,60 @@ enum odp_key_fitness odp_flow_key_to_flow(const struct nlattr *, size_t,
                                           struct flow *);
 const char *odp_key_fitness_to_string(enum odp_key_fitness);
 
+void commit_odp_actions(const struct flow *, struct flow *base,
+                        struct ofpbuf *odp_actions);
+
+/* ofproto-dpif interface.
+ *
+ * The following types and functions are logically part of ofproto-dpif.
+ * ofproto-dpif puts values of these types into the flows that it installs in
+ * the kernel datapath, though, so ovs-dpctl needs to interpret them so that
+ * it can print flows in a more human-readable manner. */
+
 enum user_action_cookie_type {
     USER_ACTION_COOKIE_UNSPEC,
     USER_ACTION_COOKIE_SFLOW,        /* Packet for sFlow sampling. */
+    USER_ACTION_COOKIE_SLOW_PATH     /* Userspace must process this flow. */
 };
 
 /* user_action_cookie is passed as argument to OVS_ACTION_ATTR_USERSPACE.
- * Since is it passed to kernel as u64, its size has to be 8 bytes. */
-struct user_action_cookie {
-    uint8_t   type;                 /* enum user_action_cookie_type. */
-    uint8_t   n_output;             /* No of output ports. used by sflow. */
-    ovs_be16  vlan_tci;             /* Used by sFlow */
-    uint32_t  data;                 /* Data is len for OFPP_CONTROLLER action.
-                                       For sFlow it is port_ifindex. */
-};
+ * Since it is passed to kernel as u64, its size has to be 8 bytes. */
+union user_action_cookie {
+    uint16_t type;              /* enum user_action_cookie_type. */
 
-BUILD_ASSERT_DECL(sizeof(struct user_action_cookie) == 8);
+    struct {
+        uint16_t type;          /* USER_ACTION_COOKIE_SFLOW. */
+        ovs_be16 vlan_tci;      /* Destination VLAN TCI. */
+        uint32_t output;        /* SFL_FLOW_SAMPLE_TYPE 'output' value. */
+    } sflow;
+
+    struct {
+        uint16_t type;          /* USER_ACTION_COOKIE_SLOW_PATH. */
+        uint16_t unused;
+        uint32_t reason;        /* enum slow_path_reason. */
+    } slow_path;
+};
+BUILD_ASSERT_DECL(sizeof(union user_action_cookie) == 8);
 
 size_t odp_put_userspace_action(uint32_t pid,
-                                const struct user_action_cookie *,
+                                const union user_action_cookie *,
                                 struct ofpbuf *odp_actions);
 
-void commit_odp_actions(const struct flow *, struct flow *base,
-                        struct ofpbuf *odp_actions);
+/* Reasons why a subfacet might not be fast-pathable. */
+enum slow_path_reason {
+    /* These reasons are mutually exclusive. */
+    SLOW_CFM = 1 << 0,          /* CFM packets need per-packet processing. */
+    SLOW_LACP = 1 << 1,         /* LACP packets need per-packet processing. */
+    SLOW_STP = 1 << 2,          /* STP packets need per-packet processing. */
+    SLOW_IN_BAND = 1 << 3,      /* In-band control needs every packet. */
+
+    /* Mutually exclusive with SLOW_CFM, SLOW_LACP, SLOW_STP.
+     * Could possibly appear with SLOW_IN_BAND. */
+    SLOW_CONTROLLER = 1 << 4,   /* Packets must go to OpenFlow controller. */
+
+    /* This can appear on its own, or, theoretically at least, along with any
+     * other combination of reasons. */
+    SLOW_MATCH = 1 << 5,        /* Datapath can't match specifically enough. */
+};
+
 #endif /* odp-util.h */

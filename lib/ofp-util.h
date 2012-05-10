@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -62,6 +62,7 @@ enum ofputil_msg_code {
     OFPUTIL_OFPST_TABLE_REQUEST,
     OFPUTIL_OFPST_PORT_REQUEST,
     OFPUTIL_OFPST_QUEUE_REQUEST,
+    OFPUTIL_OFPST_PORT_DESC_REQUEST,
 
     /* OFPST_* stat replies. */
     OFPUTIL_OFPST_DESC_REPLY,
@@ -70,6 +71,7 @@ enum ofputil_msg_code {
     OFPUTIL_OFPST_PORT_REPLY,
     OFPUTIL_OFPST_TABLE_REPLY,
     OFPUTIL_OFPST_AGGREGATE_REPLY,
+    OFPUTIL_OFPST_PORT_DESC_REPLY,
 
     /* NXT_* messages. */
     OFPUTIL_NXT_ROLE_REQUEST,
@@ -314,12 +316,15 @@ const char *ofputil_packet_in_reason_to_string(enum ofp_packet_in_reason);
 bool ofputil_packet_in_reason_from_string(const char *,
                                           enum ofp_packet_in_reason *);
 
-/* Abstract packet-out message. */
+/* Abstract packet-out message.
+ *
+ * ofputil_decode_packet_out() will ensure that 'in_port' is a physical port
+ * (OFPP_MAX or less) or one of OFPP_LOCAL, OFPP_NONE, or OFPP_CONTROLLER. */
 struct ofputil_packet_out {
     const void *packet;         /* Packet data, if buffer_id == UINT32_MAX. */
     size_t packet_len;          /* Length of packet data in bytes. */
     uint32_t buffer_id;         /* Buffer id or UINT32_MAX if no buffer. */
-    uint16_t in_port;           /* Packet's input port or OFPP_NONE. */
+    uint16_t in_port;           /* Packet's input port. */
     union ofp_action *actions;  /* Actions. */
     size_t n_actions;           /* Number of elements in 'actions' array. */
 };
@@ -432,15 +437,18 @@ struct ofputil_switch_features {
 enum ofperr ofputil_decode_switch_features(const struct ofp_switch_features *,
                                            struct ofputil_switch_features *,
                                            struct ofpbuf *);
-int ofputil_pull_switch_features_port(struct ofpbuf *,
-                                      struct ofputil_phy_port *);
-size_t ofputil_count_phy_ports(const struct ofp_switch_features *);
 
 struct ofpbuf *ofputil_encode_switch_features(
     const struct ofputil_switch_features *, enum ofputil_protocol,
     ovs_be32 xid);
 void ofputil_put_switch_features_port(const struct ofputil_phy_port *,
                                       struct ofpbuf *);
+bool ofputil_switch_features_ports_trunc(struct ofpbuf *b);
+
+/* phy_port helper functions. */
+int ofputil_pull_phy_port(uint8_t ofp_version, struct ofpbuf *,
+                          struct ofputil_phy_port *);
+size_t ofputil_count_phy_ports(uint8_t ofp_version, struct ofpbuf *);
 
 /* Abstract ofp_port_status. */
 struct ofputil_port_status {
@@ -497,6 +505,10 @@ void ofputil_start_stats_reply(const struct ofp_stats_msg *request,
 struct ofpbuf *ofputil_reserve_stats_reply(size_t len, struct list *);
 void *ofputil_append_stats_reply(size_t len, struct list *);
 
+void ofputil_append_port_desc_stats_reply(uint8_t ofp_version,
+                                          const struct ofputil_phy_port *pp,
+                                          struct list *replies);
+
 const void *ofputil_stats_body(const struct ofp_header *);
 size_t ofputil_stats_body_len(const struct ofp_header *);
 
@@ -521,6 +533,7 @@ struct ofpbuf *ofputil_encode_barrier_request(void);
 
 const char *ofputil_frag_handling_to_string(enum ofp_config_flags);
 bool ofputil_frag_handling_from_string(const char *, enum ofp_config_flags *);
+
 
 /* Actions. */
 

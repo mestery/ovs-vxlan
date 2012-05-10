@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -231,7 +231,10 @@ struct netdev_class {
     /* Sets 'netdev''s Ethernet address to 'mac' */
     int (*set_etheraddr)(struct netdev *netdev, const uint8_t mac[6]);
 
-    /* Retrieves 'netdev''s Ethernet address into 'mac'. */
+    /* Retrieves 'netdev''s Ethernet address into 'mac'.
+     *
+     * This address will be advertised as 'netdev''s MAC address through the
+     * OpenFlow protocol, among other uses. */
     int (*get_etheraddr)(const struct netdev *netdev, uint8_t mac[6]);
 
     /* Retrieves 'netdev''s MTU into '*mtup'.

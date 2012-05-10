@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  * Copyright (c) 2009 InMon Corp.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -491,7 +491,7 @@ dpif_sflow_odp_port_to_ifindex(const struct dpif_sflow *ds,
 void
 dpif_sflow_received(struct dpif_sflow *ds, struct ofpbuf *packet,
                     const struct flow *flow,
-                    const struct user_action_cookie *cookie)
+                    const union user_action_cookie *cookie)
 {
     SFL_FLOW_SAMPLE_TYPE fs;
     SFLFlow_sample_element hdrElem;
@@ -500,6 +500,7 @@ dpif_sflow_received(struct dpif_sflow *ds, struct ofpbuf *packet,
     SFLSampler *sampler;
     struct dpif_sflow_port *in_dsp;
     struct netdev_stats stats;
+    ovs_be16 vlan_tci;
     int error;
 
     /* Build a flow sample */
@@ -549,21 +550,11 @@ dpif_sflow_received(struct dpif_sflow *ds, struct ofpbuf *packet,
     switchElem.flowType.sw.src_priority = vlan_tci_to_pcp(flow->vlan_tci);
 
     /* Retrieve data from user_action_cookie. */
-    switchElem.flowType.sw.dst_vlan = vlan_tci_to_vid(cookie->vlan_tci);
-    switchElem.flowType.sw.dst_priority = vlan_tci_to_pcp(cookie->vlan_tci);
+    vlan_tci = cookie->sflow.vlan_tci;
+    switchElem.flowType.sw.dst_vlan = vlan_tci_to_vid(vlan_tci);
+    switchElem.flowType.sw.dst_priority = vlan_tci_to_pcp(vlan_tci);
 
-    /* Set output port, as defined by http://www.sflow.org/sflow_version_5.txt
-       (search for "Input/output port information"). */
-    if (!cookie->n_output) {
-        /* This value indicates that the packet was dropped for an unknown
-         * reason. */
-        fs.output = 0x40000000 | 256;
-    } else if (cookie->n_output > 1 || !cookie->data) {
-        /* Setting the high bit means "multiple output ports". */
-        fs.output = 0x80000000 | cookie->n_output;
-    } else {
-        fs.output = cookie->data;
-    }
+    fs.output = cookie->sflow.output;
 
     /* Submit the flow sample to be encoded into the next datagram. */
     SFLADD_ELEMENT(&fs, &hdrElem);
