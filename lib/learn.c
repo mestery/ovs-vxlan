@@ -184,7 +184,7 @@ learn_check(const struct nx_action_learn *learn, const struct flow *flow)
                      * prerequisites.  No prerequisite depends on the value of
                      * a field that is wider than 64 bits.  So just skip
                      * setting it entirely. */
-                    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 10);
+                    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 11);
                 }
             }
         }
@@ -204,8 +204,9 @@ learn_execute(const struct nx_action_learn *learn, const struct flow *flow,
     struct ofpbuf actions;
 
     cls_rule_init_catchall(&fm->cr, ntohs(learn->priority));
-    fm->cookie = learn->cookie;
-    fm->cookie_mask = htonll(UINT64_MAX);
+    fm->cookie = htonll(0);
+    fm->cookie_mask = htonll(0);
+    fm->new_cookie = learn->cookie;
     fm->table_id = learn->table_id;
     fm->command = OFPFC_MODIFY_STRICT;
     fm->idle_timeout = ntohs(learn->idle_timeout);

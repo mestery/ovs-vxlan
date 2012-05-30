@@ -2228,6 +2228,18 @@ bridge_wait(void)
         }
     }
 }
+
+/* Adds some memory usage statistics for bridges into 'usage', for use with
+ * memory_report(). */
+void
+bridge_get_memory_usage(struct simap *usage)
+{
+    struct bridge *br;
+
+    HMAP_FOR_EACH (br, node, &all_bridges) {
+        ofproto_get_memory_usage(br->ofproto, usage);
+    }
+}
 
 /* QoS unixctl user interface functions. */
 
@@ -2545,11 +2557,12 @@ bridge_add_del_ports(struct bridge *br,
         for (i = 0; i < port->n_interfaces; i++) {
             const struct ovsrec_interface *cfg = port->interfaces[i];
             struct iface *iface = iface_lookup(br, cfg->name);
+            const char *type = iface_get_type(cfg, br->cfg);
 
             if (iface) {
                 iface->cfg = cfg;
-                iface->type = iface_get_type(cfg, br->cfg);
-            } else {
+                iface->type = type;
+            } else if (strcmp(type, "null")) {
                 bridge_queue_if_cfg(br, cfg, port);
             }
         }

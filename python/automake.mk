@@ -1,5 +1,3 @@
-run_python = PYTHONPATH=$(top_srcdir)/python:$$PYTHON_PATH $(PYTHON)
-
 ovstest_pyfiles = \
 	python/ovstest/__init__.py \
 	python/ovstest/args.py \
@@ -29,7 +27,9 @@ ovs_pyfiles = \
 	python/ovs/socket_util.py \
 	python/ovs/stream.py \
 	python/ovs/timeval.py \
-	python/ovs/unixctl.py \
+	python/ovs/unixctl/__init__.py \
+	python/ovs/unixctl/client.py \
+	python/ovs/unixctl/server.py \
 	python/ovs/util.py \
 	python/ovs/version.py \
 	python/ovs/vlog.py

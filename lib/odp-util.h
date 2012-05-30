@@ -30,7 +30,7 @@ struct ds;
 struct flow;
 struct nlattr;
 struct ofpbuf;
-struct shash;
+struct simap;
 
 #define OVSP_NONE ((uint16_t) -1)
 
@@ -62,11 +62,19 @@ odp_port_to_ofp_port(uint16_t odp_port)
 
 void format_odp_actions(struct ds *, const struct nlattr *odp_actions,
                         size_t actions_len);
-int odp_actions_from_string(const char *, const struct shash *port_names,
+int odp_actions_from_string(const char *, const struct simap *port_names,
                             struct ofpbuf *odp_actions);
 
-/* Upper bound on the length of a nlattr-formatted flow key.  The longest
- * nlattr-formatted flow key would be:
+/* The maximum number of bytes that odp_flow_key_from_flow() appends to a
+ * buffer.  This is the upper bound on the length of a nlattr-formatted flow
+ * key that ovs-vswitchd fully understands.
+ *
+ * OVS doesn't insist that ovs-vswitchd and the datapath have exactly the same
+ * idea of a flow, so therefore this value isn't necessarily an upper bound on
+ * the length of a flow key that the datapath can pass to ovs-vswitchd.
+ *
+ * The longest nlattr-formatted flow key appended by odp_flow_key_from_flow()
+ * would be:
  *
  *                         struct  pad  nl hdr  total
  *                         ------  ---  ------  -----
@@ -74,16 +82,18 @@ int odp_actions_from_string(const char *, const struct shash *port_names,
  *  OVS_KEY_ATTR_TUN_ID        8    --     4     12
  *  OVS_KEY_ATTR_IN_PORT       4    --     4      8
  *  OVS_KEY_ATTR_ETHERNET     12    --     4     16
+ *  OVS_KEY_ATTR_ETHERTYPE     2     2     4      8  (outer VLAN ethertype)
  *  OVS_KEY_ATTR_8021Q         4    --     4      8
- *  OVS_KEY_ATTR_ETHERTYPE     2     2     4      8
+ *  OVS_KEY_ATTR_ENCAP         0    --     4      4  (VLAN encapsulation)
+ *  OVS_KEY_ATTR_ETHERTYPE     2     2     4      8  (inner VLAN ethertype)
  *  OVS_KEY_ATTR_IPV6         40    --     4     44
  *  OVS_KEY_ATTR_ICMPV6        2     2     4      8
  *  OVS_KEY_ATTR_ND           28    --     4     32
  *  OVS_KEY_ATTR_TUNNEL       20    --     4     24
  *  -------------------------------------------------
- *  total                                       168
+ *  total                                       180
  */
-#define ODPUTIL_FLOW_KEY_BYTES 168
+#define ODPUTIL_FLOW_KEY_BYTES 180
 
 /* A buffer with sufficient size and alignment to hold an nlattr-formatted flow
  * key.  An array of "struct nlattr" might not, in theory, be sufficiently
@@ -93,7 +103,7 @@ struct odputil_keybuf {
 };
 
 void odp_flow_key_format(const struct nlattr *, size_t, struct ds *);
-int odp_flow_key_from_string(const char *s, const struct shash *port_names,
+int odp_flow_key_from_string(const char *s, const struct simap *port_names,
                              struct ofpbuf *);
 
 void odp_flow_key_from_flow(struct ofpbuf *, const struct flow *);

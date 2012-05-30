@@ -79,6 +79,8 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/lockfile.h \
 	lib/mac-learning.c \
 	lib/mac-learning.h \
+	lib/memory.c \
+	lib/memory.h \
 	lib/meta-flow.c \
 	lib/meta-flow.h \
 	lib/multipath.c \
@@ -135,6 +137,8 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/sha1.h \
 	lib/shash.c \
 	lib/shash.h \
+	lib/simap.c \
+	lib/simap.h \
 	lib/signals.c \
 	lib/signals.h \
 	lib/socket-util.c \
@@ -298,7 +302,7 @@ lib/dirs.c: lib/dirs.c.in Makefile
 
 $(srcdir)/lib/ofp-errors.inc: \
 	lib/ofp-errors.h $(srcdir)/build-aux/extract-ofp-errors
-	$(PYTHON) $(srcdir)/build-aux/extract-ofp-errors \
+	$(run_python) $(srcdir)/build-aux/extract-ofp-errors \
 		$(srcdir)/lib/ofp-errors.h > $@.tmp && mv $@.tmp $@
 $(srcdir)/lib/ofp-errors.c: $(srcdir)/lib/ofp-errors.inc
 EXTRA_DIST += build-aux/extract-ofp-errors lib/ofp-errors.inc

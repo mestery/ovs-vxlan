@@ -45,6 +45,7 @@
 #include "poll-loop.h"
 #include "random.h"
 #include "shash.h"
+#include "simap.h"
 #include "sset.h"
 #include "timeval.h"
 #include "unaligned.h"
@@ -1147,6 +1148,31 @@ bool
 ofproto_is_alive(const struct ofproto *p)
 {
     return connmgr_has_controllers(p->connmgr);
+}
+
+/* Adds some memory usage statistics for 'ofproto' into 'usage', for use with
+ * memory_report(). */
+void
+ofproto_get_memory_usage(const struct ofproto *ofproto, struct simap *usage)
+{
+    const struct oftable *table;
+    unsigned int n_rules;
+
+    simap_increase(usage, "ports", hmap_count(&ofproto->ports));
+    simap_increase(usage, "ops",
+                   ofproto->n_pending + hmap_count(&ofproto->deletions));
+
+    n_rules = 0;
+    OFPROTO_FOR_EACH_TABLE (table, ofproto) {
+        n_rules += classifier_count(&table->cls);
+    }
+    simap_increase(usage, "rules", n_rules);
+
+    if (ofproto->ofproto_class->get_memory_usage) {
+        ofproto->ofproto_class->get_memory_usage(ofproto, usage);
+    }
+
+    connmgr_get_memory_usage(ofproto->connmgr, usage);
 }
 
 void
@@ -2759,7 +2785,7 @@ add_flow(struct ofproto *ofproto, struct ofconn *ofconn,
     rule->ofproto = ofproto;
     rule->cr = fm->cr;
     rule->pending = NULL;
-    rule->flow_cookie = fm->cookie;
+    rule->flow_cookie = fm->new_cookie;
     rule->created = rule->modified = rule->used = time_msec();
     rule->idle_timeout = fm->idle_timeout;
     rule->hard_timeout = fm->hard_timeout;
@@ -2859,7 +2885,9 @@ modify_flows__(struct ofproto *ofproto, struct ofconn *ofconn,
         } else {
             rule->modified = time_msec();
         }
-        rule->flow_cookie = fm->cookie;
+        if (fm->new_cookie != htonll(UINT64_MAX)) {
+            rule->flow_cookie = fm->new_cookie;
+        }
     }
     ofopgroup_submit(group);
 
@@ -2882,9 +2910,13 @@ modify_flows_loose(struct ofproto *ofproto, struct ofconn *ofconn,
     error = collect_rules_loose(ofproto, fm->table_id, &fm->cr,
                                 fm->cookie, fm->cookie_mask,
                                 OFPP_NONE, &rules);
-    return (error ? error
-            : list_is_empty(&rules) ? add_flow(ofproto, ofconn, fm, request)
-            : modify_flows__(ofproto, ofconn, fm, request, &rules));
+    if (error) {
+        return error;
+    } else if (list_is_empty(&rules)) {
+        return fm->cookie_mask ? 0 : add_flow(ofproto, ofconn, fm, request);
+    } else {
+        return modify_flows__(ofproto, ofconn, fm, request, &rules);
+    }
 }
 
 /* Implements OFPFC_MODIFY_STRICT.  Returns 0 on success or an OpenFlow error
@@ -2903,11 +2935,16 @@ modify_flow_strict(struct ofproto *ofproto, struct ofconn *ofconn,
     error = collect_rules_strict(ofproto, fm->table_id, &fm->cr,
                                  fm->cookie, fm->cookie_mask,
                                  OFPP_NONE, &rules);
-    return (error ? error
-            : list_is_empty(&rules) ? add_flow(ofproto, ofconn, fm, request)
-            : list_is_singleton(&rules) ? modify_flows__(ofproto, ofconn,
-                                                         fm, request, &rules)
-            : 0);
+
+    if (error) {
+        return error;
+    } else if (list_is_empty(&rules)) {
+        return fm->cookie_mask ? 0 : add_flow(ofproto, ofconn, fm, request);
+    } else {
+        return list_is_singleton(&rules) ? modify_flows__(ofproto, ofconn,
+                                                          fm, request, &rules)
+                                         : 0;
+    }
 }
 
 /* OFPFC_DELETE implementation. */
@@ -3227,14 +3264,13 @@ handle_nxt_set_controller_id(struct ofconn *ofconn,
 static enum ofperr
 handle_barrier_request(struct ofconn *ofconn, const struct ofp_header *oh)
 {
-    struct ofp_header *ob;
     struct ofpbuf *buf;
 
     if (ofconn_has_pending_opgroups(ofconn)) {
         return OFPROTO_POSTPONE;
     }
 
-    ob = make_openflow_xid(sizeof *ob, OFPT10_BARRIER_REPLY, oh->xid, &buf);
+    make_openflow_xid(sizeof *oh, OFPT10_BARRIER_REPLY, oh->xid, &buf);
     ofconn_send_reply(ofconn, buf);
     return 0;
 }

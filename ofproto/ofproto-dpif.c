@@ -47,6 +47,7 @@
 #include "ofproto-dpif-governor.h"
 #include "ofproto-dpif-sflow.h"
 #include "poll-loop.h"
+#include "simap.h"
 #include "timer.h"
 #include "unaligned.h"
 #include "unixctl.h"
@@ -181,7 +182,7 @@ static void bundle_destroy(struct ofbundle *);
 static void bundle_del_port(struct ofport_dpif *);
 static void bundle_run(struct ofbundle *);
 static void bundle_wait(struct ofbundle *);
-static struct ofbundle *lookup_input_bundle(struct ofproto_dpif *,
+static struct ofbundle *lookup_input_bundle(const struct ofproto_dpif *,
                                             uint16_t in_port, bool warn,
                                             struct ofport_dpif **in_ofportp);
 
@@ -530,8 +531,6 @@ struct vlan_splinter {
 
 static uint32_t vsp_realdev_to_vlandev(const struct ofproto_dpif *,
                                        uint32_t realdev, ovs_be16 vlan_tci);
-static uint16_t vsp_vlandev_to_realdev(const struct ofproto_dpif *,
-                                       uint16_t vlandev, int *vid);
 static bool vsp_adjust_flow(const struct ofproto_dpif *, struct flow *);
 static void vsp_remove(struct ofport_dpif *);
 static void vsp_add(struct ofport_dpif *, uint16_t realdev_ofp_port, int vid);
@@ -631,9 +630,9 @@ ofproto_dpif_cast(const struct ofproto *ofproto)
     return CONTAINER_OF(ofproto, struct ofproto_dpif, up);
 }
 
-static struct ofport_dpif *get_ofp_port(struct ofproto_dpif *,
+static struct ofport_dpif *get_ofp_port(const struct ofproto_dpif *,
                                         uint16_t ofp_port);
-static struct ofport_dpif *get_odp_port(struct ofproto_dpif *,
+static struct ofport_dpif *get_odp_port(const struct ofproto_dpif *,
                                         uint32_t odp_port);
 static void ofproto_trace(struct ofproto_dpif *, const struct flow *,
                           const struct ofpbuf *, ovs_be16 initial_tci,
@@ -792,6 +791,7 @@ add_internal_flow(struct ofproto_dpif *ofproto, int id,
 
     cls_rule_init_catchall(&fm.cr, 0);
     cls_rule_set_reg(&fm.cr, 0, id);
+    fm.new_cookie = htonll(0);
     fm.cookie = htonll(0);
     fm.cookie_mask = htonll(0);
     fm.table_id = TBL_INTERNAL;
@@ -1056,6 +1056,15 @@ wait(struct ofproto *ofproto_)
     if (ofproto->governor) {
         governor_wait(ofproto->governor);
     }
+}
+
+static void
+get_memory_usage(const struct ofproto *ofproto_, struct simap *usage)
+{
+    const struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
+
+    simap_increase(usage, "facets", hmap_count(&ofproto->facets));
+    simap_increase(usage, "subfacets", hmap_count(&ofproto->subfacets));
 }
 
 static void
@@ -2368,14 +2377,14 @@ set_mac_idle_time(struct ofproto *ofproto_, unsigned int idle_time)
 /* Ports. */
 
 static struct ofport_dpif *
-get_ofp_port(struct ofproto_dpif *ofproto, uint16_t ofp_port)
+get_ofp_port(const struct ofproto_dpif *ofproto, uint16_t ofp_port)
 {
     struct ofport *ofport = ofproto_get_port(&ofproto->up, ofp_port);
     return ofport ? ofport_dpif_cast(ofport) : NULL;
 }
 
 static struct ofport_dpif *
-get_odp_port(struct ofproto_dpif *ofproto, uint32_t odp_port)
+get_odp_port(const struct ofproto_dpif *ofproto, uint32_t odp_port)
 {
     return get_ofp_port(ofproto, odp_port_to_ofp_port(odp_port));
 }
@@ -3158,7 +3167,6 @@ handle_upcalls(struct ofproto_dpif *ofproto, unsigned int max_batch)
 
     assert(max_batch <= FLOW_MISS_MAX_BATCH);
 
-    n_processed = 0;
     n_misses = 0;
     for (n_processed = 0; n_processed < max_batch; n_processed++) {
         struct dpif_upcall *upcall = &misses[n_misses];
@@ -6061,8 +6069,8 @@ update_learning_table(struct ofproto_dpif *ofproto,
 }
 
 static struct ofbundle *
-lookup_input_bundle(struct ofproto_dpif *ofproto, uint16_t in_port, bool warn,
-                    struct ofport_dpif **in_ofportp)
+lookup_input_bundle(const struct ofproto_dpif *ofproto, uint16_t in_port,
+                    bool warn, struct ofport_dpif **in_ofportp)
 {
     struct ofport_dpif *ofport;
 
@@ -7101,6 +7109,7 @@ const struct ofproto_class ofproto_dpif_class = {
     run,
     run_fast,
     wait,
+    get_memory_usage,
     flush,
     get_features,
     get_tables,

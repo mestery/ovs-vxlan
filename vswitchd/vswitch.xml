@@ -409,7 +409,16 @@
           any defined controllers forever.</dd>
         </dl>
         </p>
-        <p>If this value is unset, the default is implementation-specific.</p>
+        <p>
+          The default is <code>standalone</code> if the value is unset, but
+          future versions of Open vSwitch may change the default.
+        </p>
+        <p>
+          The <code>standalone</code> mode can create forwarding loops on a
+          bridge that has more than one uplink port unless STP is enabled.  To
+          avoid loops on such a bridge, configure <code>secure</code> mode or
+          enable STP (see <ref column="stp_enable"/>).
+        </p>
         <p>When more than one controller is configured,
         <ref column="fail_mode"/> is considered only when none of the
         configured controllers can be contacted.</p>
@@ -1286,7 +1295,8 @@
 
       <column name="options" key="tos">
         Optional.  The value of the ToS bits to be set on the encapsulating
-        packet.  It may also be the word <code>inherit</code>, in which case
+        packet.  ToS is interpreted as DSCP and ECN bits, ECN part must be
+        zero.  It may also be the word <code>inherit</code>, in which case
         the ToS will be copied from the inner packet if it is IPv4 or IPv6
         (otherwise it will be 0).  The ECN fields are always inherited.
         Default is 0.

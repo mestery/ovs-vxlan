@@ -30,9 +30,8 @@
 #include "flow.h"
 #include "netlink.h"
 #include "ofpbuf.h"
-#include "openvswitch/tunnel.h"
 #include "packets.h"
-#include "shash.h"
+#include "simap.h"
 #include "timeval.h"
 #include "util.h"
 #include "vlog.h"
@@ -49,7 +48,7 @@ VLOG_DEFINE_THIS_MODULE(odp_util);
  * from another. */
 static const char *delimiters = ", \t\r\n";
 
-static int parse_odp_key_attr(const char *, const struct shash *port_names,
+static int parse_odp_key_attr(const char *, const struct simap *port_names,
                               struct ofpbuf *);
 static void format_odp_key_attr(const struct nlattr *a, struct ds *ds);
 
@@ -356,7 +355,7 @@ format_odp_actions(struct ds *ds, const struct nlattr *actions,
 }
 
 static int
-parse_odp_action(const char *s, const struct shash *port_names,
+parse_odp_action(const char *s, const struct simap *port_names,
                  struct ofpbuf *actions)
 {
     /* Many of the sscanf calls in this function use oversized destination
@@ -381,12 +380,11 @@ parse_odp_action(const char *s, const struct shash *port_names,
 
     if (port_names) {
         int len = strcspn(s, delimiters);
-        struct shash_node *node;
+        struct simap_node *node;
 
-        node = shash_find_len(port_names, s, len);
+        node = simap_find_len(port_names, s, len);
         if (node) {
-            nl_msg_put_u32(actions, OVS_ACTION_ATTR_OUTPUT,
-                           (uintptr_t) node->data);
+            nl_msg_put_u32(actions, OVS_ACTION_ATTR_OUTPUT, node->data);
             return len;
         }
     }
@@ -535,7 +533,7 @@ parse_odp_action(const char *s, const struct shash *port_names,
             for (;;) {
                 int retval;
 
-                s += strspn(s, delimiters);
+                n += strspn(s + n, delimiters);
                 if (s[n] == ')') {
                     break;
                 }
@@ -545,7 +543,6 @@ parse_odp_action(const char *s, const struct shash *port_names,
                     return retval;
                 }
                 n += retval;
-
             }
             nl_msg_end_nested(actions, actions_ofs);
             nl_msg_end_nested(actions, sample_ofs);
@@ -563,7 +560,7 @@ parse_odp_action(const char *s, const struct shash *port_names,
  * Netlink attributes.  On failure, no data is appended to 'actions'.  Either
  * way, 'actions''s data might be reallocated. */
 int
-odp_actions_from_string(const char *s, const struct shash *port_names,
+odp_actions_from_string(const char *s, const struct simap *port_names,
                         struct ofpbuf *actions)
 {
     size_t old_size;
@@ -892,7 +889,7 @@ ovs_frag_type_from_string(const char *s, enum ovs_frag_type *type)
 }
 
 static int
-parse_odp_key_attr(const char *s, const struct shash *port_names,
+parse_odp_key_attr(const char *s, const struct simap *port_names,
                    struct ofpbuf *key)
 {
     /* Many of the sscanf calls in this function use oversized destination
@@ -965,14 +962,14 @@ parse_odp_key_attr(const char *s, const struct shash *port_names,
 
     if (port_names && !strncmp(s, "in_port(", 8)) {
         const char *name;
-        const struct shash_node *node;
+        const struct simap_node *node;
         int name_len;
 
         name = s + 8;
         name_len = strcspn(s, ")");
-        node = shash_find_len(port_names, name, name_len);
+        node = simap_find_len(port_names, name, name_len);
         if (node) {
-            nl_msg_put_u32(key, OVS_KEY_ATTR_IN_PORT, (uintptr_t) node->data);
+            nl_msg_put_u32(key, OVS_KEY_ATTR_IN_PORT, node->data);
             return 8 + name_len + 1;
         }
     }
@@ -1249,15 +1246,15 @@ parse_odp_key_attr(const char *s, const struct shash *port_names,
  * data is appended to 'key'.  Either way, 'key''s data might be
  * reallocated.
  *
- * If 'port_names' is nonnull, it points to an shash that maps from a port name
- * to a port number cast to void *.  (Port names may be used instead of port
- * numbers in in_port.)
+ * If 'port_names' is nonnull, it points to an simap that maps from a port name
+ * to a port number.  (Port names may be used instead of port numbers in
+ * in_port.)
  *
  * On success, the attributes appended to 'key' are individually syntactically
  * valid, but they may not be valid as a sequence.  'key' might, for example,
  * have duplicated keys.  odp_flow_key_to_flow() will detect those errors. */
 int
-odp_flow_key_from_string(const char *s, const struct shash *port_names,
+odp_flow_key_from_string(const char *s, const struct simap *port_names,
                          struct ofpbuf *key)
 {
     const size_t old_size = key->size;
@@ -1288,7 +1285,10 @@ ovs_to_odp_frag(uint8_t nw_frag)
           : OVS_FRAG_TYPE_LATER);
 }
 
-/* Appends a representation of 'flow' as OVS_KEY_ATTR_* attributes to 'buf'. */
+/* Appends a representation of 'flow' as OVS_KEY_ATTR_* attributes to 'buf'.
+ *
+ * 'buf' must have at least ODPUTIL_FLOW_KEY_BYTES bytes of space, or be
+ * capable of being expanded to allow for that much space. */
 void
 odp_flow_key_from_flow(struct ofpbuf *buf, const struct flow *flow)
 {

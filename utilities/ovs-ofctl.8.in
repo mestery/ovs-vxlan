@@ -79,31 +79,49 @@ the device name, e.g. \fBeth0\fR.  The \fIaction\fR may be any one of the
 following:
 .
 .RS
-.IP \fBup\fR
-Enables the interface.  This is equivalent to ``ifconfig up'' on a Unix
-system.
+.IQ \fBup\fR
+.IQ \fBdown\fR
+Enable or disable the interface.  This is equivalent to \fBifconfig
+up\fR or \fBifconfig down\fR on a Unix system.
 .
-.IP \fBdown\fR
-Disables the interface.  This is equivalent to ``ifconfig down'' on a Unix
-system.
+.IP \fBstp\fR
+.IQ \fBno\-stp\fR
+Enable or disable 802.1D spanning tree protocol (STP) on the
+interface.  OpenFlow implementations that don't support STP will
+refuse to enable it.
+.
+.IP \fBreceive\fR
+.IQ \fBno\-receive\fR
+.IQ \fBreceive\-stp\fR
+.IQ \fBno\-receive\-stp\fR
+Enable or disable OpenFlow processing of packets received on this
+interface.  When packet processing is disabled, packets will be
+dropped instead of being processed through the OpenFlow table.  The
+\fBreceive\fR or \fBno\-receive\fR setting applies to all packets
+except 802.1D spanning tree packets, which are separately controlled
+by \fBreceive\-stp\fR or \fBno\-receive\-stp\fR.
 .
 .IP \fBforward\fR
-Allows forwarding of traffic on this interface.  This is the default posture
-for all ports.
-.
-.IP \fBnoforward\fR
-Disallows forwarding of traffic on this interface.
+.IQ \fBno\-forward\fR
+Allow or disallow forwarding of traffic to this interface.  By
+default, forwarding is enabled.
 .
 .IP \fBflood\fR
-When a \fIflood\fR action is specified, traffic will be sent out this
-interface.  This is the default posture for monitored ports.
+.IQ \fBno\-flood\fR
+Controls whether an OpenFlow \fBflood\fR action will send traffic out
+this interface.  By default, flooding is enabled.  Disabling flooding
+is primarily useful to prevent loops when a spanning tree protocol is
+not in use.
 .
-.IP \fBnoflood\fR
-When a \fIflood\fR action is specified, traffic will not be sent out 
-this interface.  This is primarily useful to prevent loops when a
-spanning tree protocol is not in use.
-.
+.IP \fBpacket\-in\fR
+.IQ \fBno\-packet\-in\fR
+Controls whether packets received on this interface that do not match
+a flow table entry generate a ``packet in'' message to the OpenFlow
+controller.  By default, ``packet in'' messages are enabled.
 .RE
+.IP
+The \fBshow\fR command displays (among other information) the
+configuration that \fBmod\-port\fR changes.
 .
 .IP "\fBget\-frags \fIswitch\fR"
 Prints \fIswitch\fR's fragment handling mode.  See \fBset\-frags\fR,
@@ -363,11 +381,13 @@ Matches an Ethernet source (or destination) address specified as 6
 pairs of hexadecimal digits delimited by colons
 (e.g. \fB00:0A:E4:25:6B:B0\fR).
 .
-.IP \fBdl_dst=\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB/\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fR
+.IP \fBdl_src=\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB/\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fR
+.IQ \fBdl_dst=\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB/\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fR
 Matches an Ethernet destination address specified as 6 pairs of
 hexadecimal digits delimited by colons (e.g. \fB00:0A:E4:25:6B:B0\fR),
-with a wildcard mask following the slash.  Only
-the following masks are allowed:
+with a wildcard mask following the slash. Open vSwitch 1.8 and later
+support arbitrary masks for source and/or destination. Earlier
+versions only support masking the destination with the following masks:
 .RS
 .IP \fB01:00:00:00:00:00\fR
 Match only the multicast bit.  Thus,
@@ -1076,26 +1096,42 @@ levels of the \fBresubmit\fR call stack, are ignored.
 An opaque identifier called a cookie can be used as a handle to identify
 a set of flows:
 .
-.IP \fBcookie=\fIvalue\fR[\fB/\fImask\fR]
+.IP \fBcookie=\fIvalue\fR
 .
-A cookie can be associated with a flow using the \fBadd-flow\fR and
-\fBadd-flows\fR commands.  \fIvalue\fR can be any 64-bit number and need
-not be unique among flows.  If this field is omitted, a default cookie
-value of 0 is used.
-.IP
+A cookie can be associated with a flow using the \fBadd\-flow\fR,
+\fBadd\-flows\fR, and \fBmod\-flows\fR commands.  \fIvalue\fR can be any
+64-bit number and need not be unique among flows.  If this field is
+omitted, a default cookie value of 0 is used.
+.
+.IP \fBcookie=\fIvalue\fR\fB/\fImask\fR
+.
 When using NXM, the cookie can be used as a handle for querying,
-modifying, and deleting flows.  In addition to \fIvalue\fR, an optional
-\fImask\fR may be supplied for the \fBdel-flows\fR, \fBmod-flows\fR,
-\fBdump-flows\fR, and \fBdump-aggregate\fR commands to limit matching
-cookies.  A 1-bit in \fImask\fR indicates that the corresponding bit in
-\fIcookie\fR must match exactly, and a 0-bit wildcards that bit.
+modifying, and deleting flows.  \fIvalue\fR and \fImask\fR may be
+supplied for the \fBdel\-flows\fR, \fBmod\-flows\fR, \fBdump\-flows\fR, and
+\fBdump\-aggregate\fR commands to limit matching cookies.  A 1-bit in
+\fImask\fR indicates that the corresponding bit in \fIcookie\fR must
+match exactly, and a 0-bit wildcards that bit.  A mask of \-1 may be used
+to exactly match a cookie.
+.IP
+The \fBmod\-flows\fR command can update the cookies of flows that
+match a cookie by specifying the \fIcookie\fR field twice (once with a
+mask for matching and once without to indicate the new value):
+.RS
+.IP "\fBovs\-ofctl mod\-flows br0 cookie=1,actions=normal\fR"
+Change all flows' cookies to 1 and change their actions to \fBnormal\fR.
+.IP "\fBovs\-ofctl mod\-flows br0 cookie=1/\-1,cookie=2,actions=normal\fR"
+Update cookies with a value of 1 to 2 and change their actions to
+\fBnormal\fR.
+.RE
+.IP
+The ability to match on cookies was added in Open vSwitch 1.5.0.
 .
 .PP
 The following additional field sets the priority for flows added by
 the \fBadd\-flow\fR and \fBadd\-flows\fR commands.  For
 \fBmod\-flows\fR and \fBdel\-flows\fR when \fB\-\-strict\fR is
 specified, priority must match along with the rest of the flow
-specification.  For \fBmod\-flows\fR without \fB\-\-strict\fR,
+specification.  For \fBmod-flows\fR without \fB\-\-strict\fR,
 priority is only significant if the command creates a new flow, that
 is, non-strict \fBmod\-flows\fR does not match on priority and will
 not change the priority of existing flows.  Other commands do not

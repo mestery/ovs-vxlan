@@ -76,8 +76,6 @@ ofputil_netmask_to_wcbits(ovs_be32 netmask)
  * name. */
 #define WC_INVARIANT_LIST \
     WC_INVARIANT_BIT(IN_PORT) \
-    WC_INVARIANT_BIT(DL_SRC) \
-    WC_INVARIANT_BIT(DL_DST) \
     WC_INVARIANT_BIT(DL_TYPE) \
     WC_INVARIANT_BIT(NW_PROTO)
 
@@ -101,7 +99,7 @@ static const flow_wildcards_t WC_INVARIANTS = 0
 void
 ofputil_wildcard_from_openflow(uint32_t ofpfw, struct flow_wildcards *wc)
 {
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 10);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 11);
 
     /* Initialize most of rule->wc. */
     flow_wildcards_init_catchall(wc);
@@ -127,11 +125,11 @@ ofputil_wildcard_from_openflow(uint32_t ofpfw, struct flow_wildcards *wc)
         wc->tp_dst_mask = htons(UINT16_MAX);
     }
 
-    if (ofpfw & OFPFW_DL_DST) {
-        /* OpenFlow 1.0 OFPFW_DL_DST covers the whole Ethernet destination, but
-         * Open vSwitch breaks the Ethernet destination into bits as FWW_DL_DST
-         * and FWW_ETH_MCAST. */
-        wc->wildcards |= FWW_ETH_MCAST;
+    if (!(ofpfw & OFPFW_DL_SRC)) {
+        memset(wc->dl_src_mask, 0xff, ETH_ADDR_LEN);
+    }
+    if (!(ofpfw & OFPFW_DL_DST)) {
+        memset(wc->dl_dst_mask, 0xff, ETH_ADDR_LEN);
     }
 
     /* VLAN TCI mask. */
@@ -211,6 +209,12 @@ ofputil_cls_rule_to_match(const struct cls_rule *rule, struct ofp_match *match)
     }
     if (!wc->tp_dst_mask) {
         ofpfw |= OFPFW_TP_DST;
+    }
+    if (eth_addr_is_zero(wc->dl_src_mask)) {
+        ofpfw |= OFPFW_DL_SRC;
+    }
+    if (eth_addr_is_zero(wc->dl_dst_mask)) {
+        ofpfw |= OFPFW_DL_DST;
     }
 
     /* Translate VLANs. */
@@ -1174,10 +1178,15 @@ ofputil_usable_protocols(const struct cls_rule *rule)
 {
     const struct flow_wildcards *wc = &rule->wc;
 
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 10);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 11);
 
-    /* Only NXM supports separately wildcards the Ethernet multicast bit. */
-    if (!(wc->wildcards & FWW_DL_DST) != !(wc->wildcards & FWW_ETH_MCAST)) {
+    /* NXM and OF1.1+ supports bitwise matching on ethernet addresses. */
+    if (!eth_mask_is_exact(wc->dl_src_mask)
+        && !eth_addr_is_zero(wc->dl_src_mask)) {
+        return OFPUTIL_P_NXM_ANY;
+    }
+    if (!eth_mask_is_exact(wc->dl_dst_mask)
+        && !eth_addr_is_zero(wc->dl_dst_mask)) {
         return OFPUTIL_P_NXM_ANY;
     }
 
@@ -1402,9 +1411,10 @@ ofputil_decode_flow_mod(struct ofputil_flow_mod *fm,
         ofputil_normalize_rule(&fm->cr);
 
         /* Translate the message. */
-        fm->cookie = ofm->cookie;
-        fm->cookie_mask = htonll(UINT64_MAX);
         command = ntohs(ofm->command);
+        fm->cookie = htonll(0);
+        fm->cookie_mask = htonll(0);
+        fm->new_cookie = ofm->cookie;
         fm->idle_timeout = ntohs(ofm->idle_timeout);
         fm->hard_timeout = ntohs(ofm->hard_timeout);
         fm->buffer_id = ntohl(ofm->buffer_id);
@@ -1429,17 +1439,12 @@ ofputil_decode_flow_mod(struct ofputil_flow_mod *fm,
 
         /* Translate the message. */
         command = ntohs(nfm->command);
-        if (command == OFPFC_ADD) {
-            if (fm->cookie_mask) {
-                /* The "NXM_NX_COOKIE*" matches are not valid for flow
-                 * additions.  Additions must use the "cookie" field of
-                 * the "nx_flow_mod" structure. */
-                return OFPERR_NXBRC_NXM_INVALID;
-            } else {
-                fm->cookie = nfm->cookie;
-                fm->cookie_mask = htonll(UINT64_MAX);
-            }
+        if ((command & 0xff) == OFPFC_ADD && fm->cookie_mask) {
+            /* Flow additions may only set a new cookie, not match an
+             * existing cookie. */
+            return OFPERR_NXBRC_NXM_INVALID;
         }
+        fm->new_cookie = nfm->cookie;
         fm->idle_timeout = ntohs(nfm->idle_timeout);
         fm->hard_timeout = ntohs(nfm->hard_timeout);
         fm->buffer_id = ntohl(nfm->buffer_id);
@@ -1461,10 +1466,7 @@ ofputil_decode_flow_mod(struct ofputil_flow_mod *fm,
 }
 
 /* Converts 'fm' into an OFPT_FLOW_MOD or NXT_FLOW_MOD message according to
- * 'protocol' and returns the message.
- *
- * 'flow_mod_table_id' should be true if the NXT_FLOW_MOD_TABLE_ID extension is
- * enabled, false otherwise. */
+ * 'protocol' and returns the message. */
 struct ofpbuf *
 ofputil_encode_flow_mod(const struct ofputil_flow_mod *fm,
                         enum ofputil_protocol protocol)
@@ -1486,7 +1488,7 @@ ofputil_encode_flow_mod(const struct ofputil_flow_mod *fm,
         msg = ofpbuf_new(sizeof *ofm + actions_len);
         ofm = put_openflow(sizeof *ofm, OFPT10_FLOW_MOD, msg);
         ofputil_cls_rule_to_match(&fm->cr, &ofm->match);
-        ofm->cookie = fm->cookie;
+        ofm->cookie = fm->new_cookie;
         ofm->command = htons(command);
         ofm->idle_timeout = htons(fm->idle_timeout);
         ofm->hard_timeout = htons(fm->hard_timeout);
@@ -1502,14 +1504,8 @@ ofputil_encode_flow_mod(const struct ofputil_flow_mod *fm,
         put_nxmsg(sizeof *nfm, NXT_FLOW_MOD, msg);
         nfm = msg->data;
         nfm->command = htons(command);
-        if (command == OFPFC_ADD) {
-            nfm->cookie = fm->cookie;
-            match_len = nx_put_match(msg, &fm->cr, 0, 0);
-        } else {
-            nfm->cookie = 0;
-            match_len = nx_put_match(msg, &fm->cr,
-                                     fm->cookie, fm->cookie_mask);
-        }
+        nfm->cookie = fm->new_cookie;
+        match_len = nx_put_match(msg, &fm->cr, fm->cookie, fm->cookie_mask);
         nfm->idle_timeout = htons(fm->idle_timeout);
         nfm->hard_timeout = htons(fm->hard_timeout);
         nfm->priority = htons(fm->cr.priority);
@@ -1548,7 +1544,9 @@ ofputil_flow_mod_usable_protocols(const struct ofputil_flow_mod *fms,
         if (fm->table_id != 0xff) {
             usable_protocols &= OFPUTIL_P_TID;
         }
-        if (fm->command != OFPFC_ADD && fm->cookie_mask != htonll(0)) {
+
+        /* Matching of the cookie is only supported through NXM. */
+        if (fm->cookie_mask != htonll(0)) {
             usable_protocols &= OFPUTIL_P_NXM_ANY;
         }
     }
@@ -3309,6 +3307,7 @@ ofputil_check_output_port(uint16_t port, int max_ports)
     case OFPP_FLOOD:
     case OFPP_ALL:
     case OFPP_CONTROLLER:
+    case OFPP_NONE:
     case OFPP_LOCAL:
         return 0;
 
@@ -3760,11 +3759,13 @@ ofputil_put_action(enum ofputil_action_code code, struct ofpbuf *buf)
 bool
 action_outputs_to_port(const union ofp_action *action, ovs_be16 port)
 {
-    switch (ntohs(action->type)) {
-    case OFPAT10_OUTPUT:
+    switch (ofputil_decode_action(action)) {
+    case OFPUTIL_OFPAT10_OUTPUT:
         return action->output.port == port;
-    case OFPAT10_ENQUEUE:
+    case OFPUTIL_OFPAT10_ENQUEUE:
         return ((const struct ofp_action_enqueue *) action)->port == port;
+    case OFPUTIL_NXAST_CONTROLLER:
+        return port == htons(OFPP_CONTROLLER);
     default:
         return false;
     }

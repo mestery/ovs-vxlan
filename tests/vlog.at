@@ -2,16 +2,15 @@ AT_BANNER([vlog])
 
 AT_SETUP([vlog - Python])
 AT_SKIP_IF([test $HAVE_PYTHON = no])
-AT_CHECK([$PYTHON $srcdir/test-vlog.py --log-file log_file \
--v ANY:ANY:dbg module_1:ANY:info module_2:ANY:warn ANY:syslog:off \
-2>stderr_log])
 AT_CAPTURE_FILE([log_file])
 AT_CAPTURE_FILE([stderr_log])
+AT_CHECK([$PYTHON $srcdir/test-vlog.py --log-file log_file \
+-v dbg module_1:info module_2:warn syslog:off 2>stderr_log])
 
 AT_CHECK([diff log_file stderr_log])
 
 AT_CHECK([sed -e 's/.* .* ..:..:..|//' \
--e 's/File "[[^"]]*", line [[0-9]][[0-9]]*,/File <name>, line <number>,/' \
+-e 's/File ".*", line [[0-9]][[0-9]]*,/File <name>, line <number>,/' \
 stderr_log], [0], [dnl
 0|module_0|EMER|emergency
 1|module_0|ERR|error
@@ -102,4 +101,125 @@ Traceback (most recent call last):
 AssertionError
 ])
 
+AT_CLEANUP
+
+AT_SETUP([vlog - vlog/reopen - Python])
+AT_SKIP_IF([test $HAVE_PYTHON = no])
+OVS_RUNDIR=`pwd`; export OVS_RUNDIR
+OVS_LOGDIR=`pwd`; export OVS_LOGDIR
+OVS_SYSCONFDIR=`pwd`; export OVS_SYSCONFDIR
+trap 'kill `cat test-unixctl.py.pid`' 0
+
+AT_CAPTURE_FILE([log])
+AT_CAPTURE_FILE([log.old])
+AT_CHECK([$PYTHON $srcdir/test-unixctl.py --log-file=`pwd`/log --pidfile --detach])
+
+AT_CHECK([APPCTL -t test-unixctl.py log message])
+mv log log.old
+AT_CHECK([APPCTL -t test-unixctl.py log message2])
+AT_CHECK([APPCTL -t test-unixctl.py vlog/reopen])
+AT_CHECK([APPCTL -t test-unixctl.py log message3])
+AT_CHECK([APPCTL -t test-unixctl.py exit])
+trap '' 0
+
+AT_CHECK([sed 's/.*|//' log.old], [0], [dnl
+Entering run loop.
+message
+message2
+])
+AT_CHECK([sed 's/.*|//' log], [0], [dnl
+message3
+])
+AT_CLEANUP
+
+AT_SETUP([vlog - vlog/reopen without log file - Python])
+AT_SKIP_IF([test $HAVE_PYTHON = no])
+OVS_RUNDIR=`pwd`; export OVS_RUNDIR
+OVS_LOGDIR=`pwd`; export OVS_LOGDIR
+OVS_SYSCONFDIR=`pwd`; export OVS_SYSCONFDIR
+trap 'kill `cat test-unixctl.py.pid`' 0
+
+AT_CHECK([$PYTHON $srcdir/test-unixctl.py --pidfile --detach])
+
+AT_CHECK([APPCTL -t test-unixctl.py vlog/reopen], [0],
+  [Logging to file not configured
+])
+AT_CLEANUP
+
+dnl This checks that if vlog/reopen can't reopen the log file,
+dnl nothing particularly bad (e.g. Python throws an exception and
+dnl aborts the program) happens.
+AT_SETUP([vlog - vlog/reopen can't reopen log file - Python])
+AT_SKIP_IF([test $HAVE_PYTHON = no])
+
+# Verify that /dev/full is a character device that fails writes.
+AT_SKIP_IF([test ! -c /dev/full])
+AT_SKIP_IF([echo > /dev/full])
+
+OVS_RUNDIR=`pwd`; export OVS_RUNDIR
+OVS_LOGDIR=`pwd`; export OVS_LOGDIR
+OVS_SYSCONFDIR=`pwd`; export OVS_SYSCONFDIR
+trap 'kill `cat test-unixctl.py.pid`' 0
+
+AT_CHECK([$PYTHON $srcdir/test-unixctl.py --log-file=`pwd`/log --pidfile --detach])
+AT_CHECK([APPCTL -t test-unixctl.py log message])
+mv log log.old
+ln -s /dev/full log
+AT_CHECK([APPCTL -t test-unixctl.py vlog/reopen])
+AT_CHECK([APPCTL -t test-unixctl.py log message2])
+rm log
+AT_CHECK([APPCTL -t test-unixctl.py vlog/reopen])
+AT_CHECK([APPCTL -t test-unixctl.py log message3])
+AT_CHECK([APPCTL -t test-unixctl.py exit])
+AT_CHECK([sed 's/.*|//' log.old], [0], [dnl
+Entering run loop.
+message
+])
+AT_CHECK([sed 's/.*|//' log], [0], [dnl
+message3
+])
+AT_CLEANUP
+
+AT_SETUP([vlog - vlog/set and vlog/list - Python])
+AT_SKIP_IF([test $HAVE_PYTHON = no])
+OVS_RUNDIR=`pwd`; export OVS_RUNDIR
+OVS_LOGDIR=`pwd`; export OVS_LOGDIR
+OVS_SYSCONFDIR=`pwd`; export OVS_SYSCONFDIR
+trap 'kill `cat test-unixctl.py.pid`' 0
+
+AT_CAPTURE_FILE([log])
+AT_CHECK([$PYTHON $srcdir/test-unixctl.py --log-file=`pwd`/log --pidfile --detach])
+
+AT_CHECK([APPCTL -t test-unixctl.py vlog/list], [0], [dnl
+                 console    syslog    file
+                 -------    ------    ------
+daemon            info       info       info
+fatal-signal      info       info       info
+jsonrpc           info       info       info
+poller            info       info       info
+reconnect         info       info       info
+socket_util       info       info       info
+stream            info       info       info
+test-unixctl      info       info       info
+unixctl_server    info       info       info
+])
+
+AT_CHECK([APPCTL -t test-unixctl.py vlog/set daemon:syslog:err])
+AT_CHECK([APPCTL -t test-unixctl.py vlog/set file:dbg])
+AT_CHECK([APPCTL -t test-unixctl.py vlog/set nonexistent], [0],
+  [no facility, level, or module "nonexistent"
+])
+AT_CHECK([APPCTL -t test-unixctl.py vlog/list], [0], [dnl
+                 console    syslog    file
+                 -------    ------    ------
+daemon            info        err        dbg
+fatal-signal      info       info        dbg
+jsonrpc           info       info        dbg
+poller            info       info        dbg
+reconnect         info       info        dbg
+socket_util       info       info        dbg
+stream            info       info        dbg
+test-unixctl      info       info        dbg
+unixctl_server    info       info        dbg
+])
 AT_CLEANUP
