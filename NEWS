@@ -1,8 +1,20 @@
 post-v1.7.0
 ------------------------
+    - New FAQ.  Please send updates and additions!
     - ovs-ofctl:
         - "mod-port" command can now control all OpenFlow config flags.
-    - Added support for arbitrary ethernet masks
+    - OpenFlow:
+      - Allow general bitwise masking for IPv4 and IPv6 addresses in
+        IPv4, IPv6, and ARP packets.  (Previously, only CIDR masks
+        were allowed.)
+      - Allow support for arbitrary Ethernet masks.  (Previously, only
+        the multicast bit in the destination address could be individually
+	masked.)
+    - Additional protocols are not mirrored and dropped when forward-bpdu is
+      false.  For a full list, see the ovs-vswitchd.conf.db man page.
+    - Open vSwitch now sends RARP packets in situations where it previously
+      sent a custom protocol, making it consistent with behavior of QEMU and
+      VMware.
 
 
 v1.7.0 - xx xxx xxxx
@@ -56,8 +68,6 @@ v1.6.0 - xx xxx xxxx
         - Added "fin_timeout" support to "learn" action.
         - New Nicira action NXAST_CONTROLLER that offers additional features
           over output to OFPP_CONTROLLER.
-    - The default MAC learning timeout has been increased from 60 seconds
-      to 300 seconds.  The MAC learning timeout is now configurable.
     - When QoS settings for an interface do not configure a default queue
       (queue 0), Open vSwitch now uses a default configuration for that
       queue, instead of dropping all packets as in previous versions.
@@ -84,7 +94,7 @@ v1.6.0 - xx xxx xxxx
     - CFM module CCM broadcasts can now be tagged with an 802.1p priority.
 
 
-v1.5.0 - xx xxx xxxx
+v1.5.0 - 01 Jun 2012
 ------------------------
     - OpenFlow:
         - Added support for querying, modifying, and deleting flows
@@ -98,6 +108,8 @@ v1.5.0 - xx xxx xxxx
           {=}, {!=}, {<}, {>}, {<=}, and {>=}.
     - ovsdb-tool now uses the typical database and schema installation
       directories as defaults.
+    - The default MAC learning timeout has been increased from 60 seconds
+      to 300 seconds.  The MAC learning timeout is now configurable.
 
 
 v1.4.0 - 30 Jan 2012

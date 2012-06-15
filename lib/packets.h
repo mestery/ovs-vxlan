@@ -84,12 +84,12 @@ static inline bool eth_addr_equal_except(const uint8_t a[ETH_ADDR_LEN],
                                     const uint8_t b[ETH_ADDR_LEN],
                                     const uint8_t mask[ETH_ADDR_LEN])
 {
-    return (((a[0] ^ b[0]) & mask[0])
-            || ((a[1] ^ b[1]) & mask[1])
-            || ((a[2] ^ b[2]) & mask[2])
-            || ((a[3] ^ b[3]) & mask[3])
-            || ((a[4] ^ b[4]) & mask[4])
-            || ((a[5] ^ b[5]) & mask[5]));
+    return !(((a[0] ^ b[0]) & mask[0])
+             || ((a[1] ^ b[1]) & mask[1])
+             || ((a[2] ^ b[2]) & mask[2])
+             || ((a[3] ^ b[3]) & mask[3])
+             || ((a[4] ^ b[4]) & mask[4])
+             || ((a[5] ^ b[5]) & mask[5]));
 }
 static inline uint64_t eth_addr_to_uint64(const uint8_t ea[ETH_ADDR_LEN])
 {
@@ -131,23 +131,11 @@ static inline void eth_addr_nicira_random(uint8_t ea[ETH_ADDR_LEN])
     /* Set the top bit to indicate random Nicira address. */
     ea[3] |= 0x80;
 }
-/* Returns true if 'ea' is a reserved multicast address, that a bridge must
- * never forward, false otherwise. */
-static inline bool eth_addr_is_reserved(const uint8_t ea[ETH_ADDR_LEN])
-{
-    return (ea[0] == 0x01
-            && ea[1] == 0x80
-            && ea[2] == 0xc2
-            && ea[3] == 0x00
-            && ea[4] == 0x00
-            && (ea[5] & 0xf0) == 0x00);
-}
 
+bool eth_addr_is_reserved(const uint8_t ea[ETH_ADDR_LEN]);
 bool eth_addr_from_string(const char *, uint8_t ea[ETH_ADDR_LEN]);
 
-void compose_benign_packet(struct ofpbuf *, const char *tag,
-                           uint16_t snap_type,
-                           const uint8_t eth_src[ETH_ADDR_LEN]);
+void compose_rarp(struct ofpbuf *, const uint8_t eth_src[ETH_ADDR_LEN]);
 
 void eth_push_vlan(struct ofpbuf *, ovs_be16 tci);
 void eth_pop_vlan(struct ofpbuf *);
@@ -192,6 +180,9 @@ void eth_addr_bitand(const uint8_t src[ETH_ADDR_LEN],
 #define ETH_TYPE_VLAN          0x8100
 #define ETH_TYPE_IPV6          0x86dd
 #define ETH_TYPE_LACP          0x8809
+#define ETH_TYPE_RARP          0x8035
+#define ETH_TYPE_MPLS          0x8847
+#define ETH_TYPE_MPLS_MCAST    0x8848
 
 /* Minimum value for an Ethernet type.  Values below this are IEEE 802.2 frame
  * lengths. */
@@ -237,6 +228,25 @@ struct llc_snap_header {
     struct snap_header snap;
 } __attribute__((packed));
 BUILD_ASSERT_DECL(LLC_SNAP_HEADER_LEN == sizeof(struct llc_snap_header));
+
+#define ARP_HTYPE_ETH 0x0001
+#define RARP_REQUEST_REVERSE 0x0003
+
+#define RARP_HEADER_LEN 28
+/* RARP header only for Ethernet-IP. */
+struct rarp_header {
+    ovs_be16 hw_addr_space;        /* ARP_HTYPE_ETH. */
+    ovs_be16 proto_addr_space;     /* ETH_TYPE_IP. */
+    uint8_t hw_addr_length;        /* ETH_ADDR_LEN. */
+    uint8_t proto_addr_length;     /* IPV4_ADDR_LEN. */
+    ovs_be16 opcode;               /* RARP_REQUEST_REVERSE. */
+    uint8_t src_hw_addr[ETH_ADDR_LEN];
+    ovs_be32 src_proto_addr;
+    uint8_t target_hw_addr[ETH_ADDR_LEN];
+    ovs_be32 target_proto_addr;
+} __attribute__((packed));
+BUILD_ASSERT_DECL(RARP_HEADER_LEN == sizeof(struct rarp_header));
+
 
 #define VLAN_VID_MASK 0x0fff
 #define VLAN_VID_SHIFT 0
@@ -328,6 +338,10 @@ void ip_format_masked(ovs_be32 ip, ovs_be32 mask, struct ds *);
 #define IP_VER(ip_ihl_ver) ((ip_ihl_ver) >> 4)
 #define IP_IHL(ip_ihl_ver) ((ip_ihl_ver) & 15)
 #define IP_IHL_VER(ihl, ver) (((ver) << 4) | (ihl))
+
+#ifndef IPPROTO_SCTP
+#define IPPROTO_SCTP 132
+#endif
 
 /* TOS fields. */
 #define IP_ECN_MASK 0x03

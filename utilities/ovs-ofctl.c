@@ -1919,11 +1919,8 @@ do_parse_flows(int argc OVS_UNUSED, char *argv[])
     free(fms);
 }
 
-/* "parse-nx-match": reads a series of nx_match specifications as strings from
- * stdin, does some internal fussing with them, and then prints them back as
- * strings on stdout. */
 static void
-do_parse_nx_match(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
+do_parse_nxm__(bool oxm)
 {
     struct ds in;
 
@@ -1954,7 +1951,8 @@ do_parse_nx_match(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
             /* Convert cls_rule back to nx_match. */
             ofpbuf_uninit(&nx_match);
             ofpbuf_init(&nx_match, 0);
-            match_len = nx_put_match(&nx_match, &rule, cookie, cookie_mask);
+            match_len = nx_put_match(&nx_match, oxm, &rule,
+                                     cookie, cookie_mask);
 
             /* Convert nx_match to string. */
             out = nx_match_to_string(nx_match.data, match_len);
@@ -1966,6 +1964,81 @@ do_parse_nx_match(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
         }
 
         ofpbuf_uninit(&nx_match);
+    }
+    ds_destroy(&in);
+}
+
+/* "parse-nxm": reads a series of NXM nx_match specifications as strings from
+ * stdin, does some internal fussing with them, and then prints them back as
+ * strings on stdout. */
+static void
+do_parse_nxm(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
+{
+    return do_parse_nxm__(false);
+}
+
+/* "parse-oxm": reads a series of OXM nx_match specifications as strings from
+ * stdin, does some internal fussing with them, and then prints them back as
+ * strings on stdout. */
+static void
+do_parse_oxm(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
+{
+    return do_parse_nxm__(true);
+}
+
+/* "parse-ofp11-match": reads a series of ofp11_match specifications as hex
+ * bytes from stdin, converts them to cls_rules, prints them as strings on
+ * stdout, and then converts them back to hex bytes and prints any differences
+ * from the input. */
+static void
+do_parse_ofp11_match(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
+{
+    struct ds in;
+
+    ds_init(&in);
+    while (!ds_get_preprocessed_line(&in, stdin)) {
+        struct ofpbuf match_in;
+        struct ofp11_match match_out;
+        struct cls_rule rule;
+        enum ofperr error;
+        int i;
+
+        /* Parse hex bytes. */
+        ofpbuf_init(&match_in, 0);
+        if (ofpbuf_put_hex(&match_in, ds_cstr(&in), NULL)[0] != '\0') {
+            ovs_fatal(0, "Trailing garbage in hex data");
+        }
+        if (match_in.size != sizeof(struct ofp11_match)) {
+            ovs_fatal(0, "Input is %zu bytes, expected %zu",
+                      match_in.size, sizeof(struct ofp11_match));
+        }
+
+        /* Convert to cls_rule. */
+        error = ofputil_cls_rule_from_ofp11_match(match_in.data,
+                                                  OFP_DEFAULT_PRIORITY, &rule);
+        if (error) {
+            printf("bad ofp11_match: %s\n\n", ofperr_get_name(error));
+            ofpbuf_uninit(&match_in);
+            continue;
+        }
+
+        /* Print cls_rule. */
+        cls_rule_print(&rule);
+
+        /* Convert back to ofp11_match and print differences from input. */
+        ofputil_cls_rule_to_ofp11_match(&rule, &match_out);
+
+        for (i = 0; i < sizeof match_out; i++) {
+            uint8_t in = ((const uint8_t *) match_in.data)[i];
+            uint8_t out = ((const uint8_t *) &match_out)[i];
+
+            if (in != out) {
+                printf("%2d: %02"PRIx8" -> %02"PRIx8"\n", i, in, out);
+            }
+        }
+        putchar('\n');
+
+        ofpbuf_uninit(&match_in);
     }
     ds_destroy(&in);
 }
@@ -2043,7 +2116,10 @@ static const struct command all_commands[] = {
     /* Undocumented commands for testing. */
     { "parse-flow", 1, 1, do_parse_flow },
     { "parse-flows", 1, 1, do_parse_flows },
-    { "parse-nx-match", 0, 0, do_parse_nx_match },
+    { "parse-nx-match", 0, 0, do_parse_nxm },
+    { "parse-nxm", 0, 0, do_parse_nxm },
+    { "parse-oxm", 0, 0, do_parse_oxm },
+    { "parse-ofp11-match", 0, 0, do_parse_ofp11_match },
     { "print-error", 1, 1, do_print_error },
     { "ofp-print", 1, 2, do_ofp_print },
 

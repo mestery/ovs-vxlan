@@ -117,7 +117,6 @@ struct ofoperation {
     struct hmap_node hmap_node; /* In ofproto's "deletions" hmap. */
     struct rule *rule;          /* Rule being operated upon. */
     enum ofoperation_type type; /* Type of operation. */
-    int status;                 /* -1 if pending, otherwise 0 or error code. */
     struct rule *victim;        /* OFOPERATION_ADDING: Replaced rule. */
     union ofp_action *actions;  /* OFOPERATION_MODIFYING: Replaced actions. */
     int n_actions;              /* OFOPERATION_MODIFYING: # of old actions. */
@@ -2138,7 +2137,7 @@ handle_table_stats_request(struct ofconn *ofconn,
     for (i = 0; i < p->n_tables; i++) {
         ots[i].table_id = i;
         sprintf(ots[i].name, "table%zu", i);
-        ots[i].wildcards = htonl(OFPFW_ALL);
+        ots[i].wildcards = htonl(OFPFW10_ALL);
         ots[i].max_entries = htonl(1000000); /* An arbitrary big number. */
         ots[i].active_count = htonl(classifier_count(&p->tables[i].cls));
     }
@@ -3090,8 +3089,8 @@ handle_flow_mod(struct ofconn *ofconn, const struct ofp_header *oh)
         return error;
     }
 
-    /* We do not support the emergency flow cache.  It will hopefully get
-     * dropped from OpenFlow in the near future. */
+    /* We do not support the OpenFlow 1.0 emergency flow cache, which is not
+     * required in OpenFlow 1.0.1 and removed from OpenFlow 1.1. */
     if (fm.flags & OFPFF_EMERG) {
         /* There isn't a good fit for an error code, so just state that the
          * flow table is full. */
@@ -3509,7 +3508,6 @@ ofoperation_create(struct ofopgroup *group, struct rule *rule,
     list_push_back(&group->ops, &op->group_node);
     op->rule = rule;
     op->type = type;
-    op->status = -1;
     op->flow_cookie = rule->flow_cookie;
 
     if (type == OFOPERATION_DELETE) {
@@ -3575,7 +3573,6 @@ ofoperation_complete(struct ofoperation *op, enum ofperr error)
     struct ofproto *ofproto = rule->ofproto;
 
     assert(rule->pending == op);
-    assert(op->status < 0);
 
     if (!error
         && !group->error
@@ -3617,6 +3614,7 @@ ofoperation_complete(struct ofoperation *op, enum ofperr error)
         } else {
             oftable_substitute_rule(rule, op->victim);
             ofproto_rule_destroy__(rule);
+            op->rule = NULL;
         }
         break;
 

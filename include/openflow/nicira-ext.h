@@ -1149,11 +1149,11 @@ OFP_ASSERT(sizeof(struct nx_action_output_reg) == 24);
 
 /* Flexible flow specifications (aka NXM = Nicira Extended Match).
  *
- * OpenFlow 1.0 has "struct ofp_match" for specifying flow matches.  This
+ * OpenFlow 1.0 has "struct ofp10_match" for specifying flow matches.  This
  * structure is fixed-length and hence difficult to extend.  This section
  * describes a more flexible, variable-length flow match, called "nx_match" for
  * short, that is also supported by Open vSwitch.  This section also defines a
- * replacement for each OpenFlow message that includes struct ofp_match.
+ * replacement for each OpenFlow message that includes struct ofp10_match.
  *
  *
  * Format
@@ -1211,7 +1211,7 @@ OFP_ASSERT(sizeof(struct nx_action_output_reg) == 24);
  *     matches bit J in nxm_value.  A 0-bit in nxm_mask causes the
  *     corresponding bits in nxm_value and the field's value to be ignored.
  *     (The sense of the nxm_mask bits is the opposite of that used by the
- *     "wildcards" member of struct ofp_match.)
+ *     "wildcards" member of struct ofp10_match.)
  *
  *     When nxm_hasmask is 1, nxm_length is always even.
  *
@@ -1461,7 +1461,8 @@ OFP_ASSERT(sizeof(struct nx_action_output_reg) == 24);
  *
  * Format: 32-bit integer in network byte order.
  *
- * Masking: Only CIDR masks are allowed, that is, masks that consist of N
+ * Masking: Fully maskable, in Open vSwitch 1.8 and later.  In earlier
+ *   versions, only CIDR masks are allowed, that is, masks that consist of N
  *   high-order bits set to 1 and the other 32-N bits set to 0. */
 #define NXM_OF_IP_SRC     NXM_HEADER  (0x0000,  7, 4)
 #define NXM_OF_IP_SRC_W   NXM_HEADER_W(0x0000,  7, 4)
@@ -1530,7 +1531,8 @@ OFP_ASSERT(sizeof(struct nx_action_output_reg) == 24);
  *
  * Format: 32-bit integer in network byte order.
  *
- * Masking: Only CIDR masks are allowed, that is, masks that consist of N
+ * Masking: Fully maskable, in Open vSwitch 1.8 and later.  In earlier
+ *   versions, only CIDR masks are allowed, that is, masks that consist of N
  *   high-order bits set to 1 and the other 32-N bits set to 0. */
 #define NXM_OF_ARP_SPA    NXM_HEADER  (0x0000, 16, 4)
 #define NXM_OF_ARP_SPA_W  NXM_HEADER_W(0x0000, 16, 4)
@@ -1609,7 +1611,8 @@ OFP_ASSERT(sizeof(struct nx_action_output_reg) == 24);
  *
  * Format: 128-bit IPv6 address.
  *
- * Masking: Only CIDR masks are allowed, that is, masks that consist of N
+ * Masking: Fully maskable, in Open vSwitch 1.8 and later.  In previous
+ *   versions, only CIDR masks are allowed, that is, masks that consist of N
  *   high-order bits set to 1 and the other 128-N bits set to 0. */
 #define NXM_NX_IPV6_SRC    NXM_HEADER  (0x0001, 19, 16)
 #define NXM_NX_IPV6_SRC_W  NXM_HEADER_W(0x0001, 19, 16)
@@ -1637,7 +1640,8 @@ OFP_ASSERT(sizeof(struct nx_action_output_reg) == 24);
  *
  * Format: 128-bit IPv6 address.
  *
- * Masking: Only CIDR masks are allowed, that is, masks that consist of N
+ * Masking: Fully maskable, in Open vSwitch 1.8 and later.  In previous
+ *   versions, only CIDR masks are allowed, that is, masks that consist of N
  *   high-order bits set to 1 and the other 128-N bits set to 0. */
 #define NXM_NX_ND_TARGET     NXM_HEADER    (0x0001, 23, 16)
 #define NXM_NX_ND_TARGET_W   NXM_HEADER_W  (0x0001, 23, 16)

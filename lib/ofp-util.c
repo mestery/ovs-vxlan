@@ -64,15 +64,18 @@ ofputil_wcbits_to_netmask(int wcbits)
 }
 
 /* Given the IP netmask 'netmask', returns the number of bits of the IP address
- * that it wildcards, that is, the number of 0-bits in 'netmask'.  'netmask'
- * must be a CIDR netmask (see ip_is_cidr()). */
+ * that it wildcards, that is, the number of 0-bits in 'netmask', a number
+ * between 0 and 32 inclusive.
+ *
+ * If 'netmask' is not a CIDR netmask (see ip_is_cidr()), the return value will
+ * still be in the valid range but isn't otherwise meaningful. */
 int
 ofputil_netmask_to_wcbits(ovs_be32 netmask)
 {
     return 32 - ip_count_cidr_bits(netmask);
 }
 
-/* A list of the FWW_* and OFPFW_ bits that have the same value, meaning, and
+/* A list of the FWW_* and OFPFW10_ bits that have the same value, meaning, and
  * name. */
 #define WC_INVARIANT_LIST \
     WC_INVARIANT_BIT(IN_PORT) \
@@ -81,7 +84,7 @@ ofputil_netmask_to_wcbits(ovs_be32 netmask)
 
 /* Verify that all of the invariant bits (as defined on WC_INVARIANT_LIST)
  * actually have the same names and values. */
-#define WC_INVARIANT_BIT(NAME) BUILD_ASSERT_DECL(FWW_##NAME == OFPFW_##NAME);
+#define WC_INVARIANT_BIT(NAME) BUILD_ASSERT_DECL(FWW_##NAME == OFPFW10_##NAME);
     WC_INVARIANT_LIST
 #undef WC_INVARIANT_BIT
 
@@ -93,11 +96,12 @@ static const flow_wildcards_t WC_INVARIANTS = 0
 #undef WC_INVARIANT_BIT
 ;
 
-/* Converts the wildcard in 'ofpfw' into a flow_wildcards in 'wc' for use in
- * struct cls_rule.  It is the caller's responsibility to handle the special
- * case where the flow match's dl_vlan is set to OFP_VLAN_NONE. */
+/* Converts the OpenFlow 1.0 wildcards in 'ofpfw' (OFPFW10_*) into a
+ * flow_wildcards in 'wc' for use in struct cls_rule.  It is the caller's
+ * responsibility to handle the special case where the flow match's dl_vlan is
+ * set to OFP_VLAN_NONE. */
 void
-ofputil_wildcard_from_openflow(uint32_t ofpfw, struct flow_wildcards *wc)
+ofputil_wildcard_from_ofpfw10(uint32_t ofpfw, struct flow_wildcards *wc)
 {
     BUILD_ASSERT_DECL(FLOW_WC_SEQ == 11);
 
@@ -105,53 +109,53 @@ ofputil_wildcard_from_openflow(uint32_t ofpfw, struct flow_wildcards *wc)
     flow_wildcards_init_catchall(wc);
     wc->wildcards = (OVS_FORCE flow_wildcards_t) ofpfw & WC_INVARIANTS;
 
-    /* Wildcard fields that aren't defined by ofp_match or tun_id. */
+    /* Wildcard fields that aren't defined by ofp10_match or tun_id. */
     wc->wildcards |= (FWW_ARP_SHA | FWW_ARP_THA | FWW_NW_ECN | FWW_NW_TTL
                       | FWW_IPV6_LABEL);
 
-    if (ofpfw & OFPFW_NW_TOS) {
+    if (ofpfw & OFPFW10_NW_TOS) {
         /* OpenFlow 1.0 defines a TOS wildcard, but it's much later in
          * the enum than we can use. */
         wc->wildcards |= FWW_NW_DSCP;
     }
 
-    wc->nw_src_mask = ofputil_wcbits_to_netmask(ofpfw >> OFPFW_NW_SRC_SHIFT);
-    wc->nw_dst_mask = ofputil_wcbits_to_netmask(ofpfw >> OFPFW_NW_DST_SHIFT);
+    wc->nw_src_mask = ofputil_wcbits_to_netmask(ofpfw >> OFPFW10_NW_SRC_SHIFT);
+    wc->nw_dst_mask = ofputil_wcbits_to_netmask(ofpfw >> OFPFW10_NW_DST_SHIFT);
 
-    if (!(ofpfw & OFPFW_TP_SRC)) {
+    if (!(ofpfw & OFPFW10_TP_SRC)) {
         wc->tp_src_mask = htons(UINT16_MAX);
     }
-    if (!(ofpfw & OFPFW_TP_DST)) {
+    if (!(ofpfw & OFPFW10_TP_DST)) {
         wc->tp_dst_mask = htons(UINT16_MAX);
     }
 
-    if (!(ofpfw & OFPFW_DL_SRC)) {
+    if (!(ofpfw & OFPFW10_DL_SRC)) {
         memset(wc->dl_src_mask, 0xff, ETH_ADDR_LEN);
     }
-    if (!(ofpfw & OFPFW_DL_DST)) {
+    if (!(ofpfw & OFPFW10_DL_DST)) {
         memset(wc->dl_dst_mask, 0xff, ETH_ADDR_LEN);
     }
 
     /* VLAN TCI mask. */
-    if (!(ofpfw & OFPFW_DL_VLAN_PCP)) {
+    if (!(ofpfw & OFPFW10_DL_VLAN_PCP)) {
         wc->vlan_tci_mask |= htons(VLAN_PCP_MASK | VLAN_CFI);
     }
-    if (!(ofpfw & OFPFW_DL_VLAN)) {
+    if (!(ofpfw & OFPFW10_DL_VLAN)) {
         wc->vlan_tci_mask |= htons(VLAN_VID_MASK | VLAN_CFI);
     }
 }
 
-/* Converts the ofp_match in 'match' into a cls_rule in 'rule', with the given
- * 'priority'. */
+/* Converts the ofp10_match in 'match' into a cls_rule in 'rule', with the
+ * given 'priority'. */
 void
-ofputil_cls_rule_from_match(const struct ofp_match *match,
-                            unsigned int priority, struct cls_rule *rule)
+ofputil_cls_rule_from_ofp10_match(const struct ofp10_match *match,
+                                  unsigned int priority, struct cls_rule *rule)
 {
-    uint32_t ofpfw = ntohl(match->wildcards) & OFPFW_ALL;
+    uint32_t ofpfw = ntohl(match->wildcards) & OFPFW10_ALL;
 
     /* Initialize rule->priority, rule->wc. */
     rule->priority = !ofpfw ? UINT16_MAX : priority;
-    ofputil_wildcard_from_openflow(ofpfw, &rule->wc);
+    ofputil_wildcard_from_ofpfw10(ofpfw, &rule->wc);
 
     /* Initialize most of rule->flow. */
     rule->flow.nw_src = match->nw_src;
@@ -166,12 +170,12 @@ ofputil_cls_rule_from_match(const struct ofp_match *match,
     rule->flow.nw_proto = match->nw_proto;
 
     /* Translate VLANs. */
-    if (!(ofpfw & OFPFW_DL_VLAN) && match->dl_vlan == htons(OFP_VLAN_NONE)) {
+    if (!(ofpfw & OFPFW10_DL_VLAN) && match->dl_vlan == htons(OFP_VLAN_NONE)) {
         /* Match only packets without 802.1Q header.
          *
-         * When OFPFW_DL_VLAN_PCP is wildcarded, this is obviously correct.
+         * When OFPFW10_DL_VLAN_PCP is wildcarded, this is obviously correct.
          *
-         * If OFPFW_DL_VLAN_PCP is matched, the flow match is contradictory,
+         * If OFPFW10_DL_VLAN_PCP is matched, the flow match is contradictory,
          * because we can't have a specific PCP without an 802.1Q header.
          * However, older versions of OVS treated this as matching packets
          * withut an 802.1Q header, so we do here too. */
@@ -190,50 +194,53 @@ ofputil_cls_rule_from_match(const struct ofp_match *match,
     cls_rule_zero_wildcarded_fields(rule);
 }
 
-/* Convert 'rule' into the OpenFlow match structure 'match'. */
+/* Convert 'rule' into the OpenFlow 1.0 match structure 'match'. */
 void
-ofputil_cls_rule_to_match(const struct cls_rule *rule, struct ofp_match *match)
+ofputil_cls_rule_to_ofp10_match(const struct cls_rule *rule,
+                                struct ofp10_match *match)
 {
     const struct flow_wildcards *wc = &rule->wc;
     uint32_t ofpfw;
 
     /* Figure out most OpenFlow wildcards. */
     ofpfw = (OVS_FORCE uint32_t) (wc->wildcards & WC_INVARIANTS);
-    ofpfw |= ofputil_netmask_to_wcbits(wc->nw_src_mask) << OFPFW_NW_SRC_SHIFT;
-    ofpfw |= ofputil_netmask_to_wcbits(wc->nw_dst_mask) << OFPFW_NW_DST_SHIFT;
+    ofpfw |= (ofputil_netmask_to_wcbits(wc->nw_src_mask)
+              << OFPFW10_NW_SRC_SHIFT);
+    ofpfw |= (ofputil_netmask_to_wcbits(wc->nw_dst_mask)
+              << OFPFW10_NW_DST_SHIFT);
     if (wc->wildcards & FWW_NW_DSCP) {
-        ofpfw |= OFPFW_NW_TOS;
+        ofpfw |= OFPFW10_NW_TOS;
     }
     if (!wc->tp_src_mask) {
-        ofpfw |= OFPFW_TP_SRC;
+        ofpfw |= OFPFW10_TP_SRC;
     }
     if (!wc->tp_dst_mask) {
-        ofpfw |= OFPFW_TP_DST;
+        ofpfw |= OFPFW10_TP_DST;
     }
     if (eth_addr_is_zero(wc->dl_src_mask)) {
-        ofpfw |= OFPFW_DL_SRC;
+        ofpfw |= OFPFW10_DL_SRC;
     }
     if (eth_addr_is_zero(wc->dl_dst_mask)) {
-        ofpfw |= OFPFW_DL_DST;
+        ofpfw |= OFPFW10_DL_DST;
     }
 
     /* Translate VLANs. */
     match->dl_vlan = htons(0);
     match->dl_vlan_pcp = 0;
     if (rule->wc.vlan_tci_mask == htons(0)) {
-        ofpfw |= OFPFW_DL_VLAN | OFPFW_DL_VLAN_PCP;
+        ofpfw |= OFPFW10_DL_VLAN | OFPFW10_DL_VLAN_PCP;
     } else if (rule->wc.vlan_tci_mask & htons(VLAN_CFI)
                && !(rule->flow.vlan_tci & htons(VLAN_CFI))) {
         match->dl_vlan = htons(OFP_VLAN_NONE);
     } else {
         if (!(rule->wc.vlan_tci_mask & htons(VLAN_VID_MASK))) {
-            ofpfw |= OFPFW_DL_VLAN;
+            ofpfw |= OFPFW10_DL_VLAN;
         } else {
             match->dl_vlan = htons(vlan_tci_to_vid(rule->flow.vlan_tci));
         }
 
         if (!(rule->wc.vlan_tci_mask & htons(VLAN_PCP_MASK))) {
-            ofpfw |= OFPFW_DL_VLAN_PCP;
+            ofpfw |= OFPFW10_DL_VLAN_PCP;
         } else {
             match->dl_vlan_pcp = vlan_tci_to_pcp(rule->flow.vlan_tci);
         }
@@ -255,8 +262,265 @@ ofputil_cls_rule_to_match(const struct cls_rule *rule, struct ofp_match *match)
     memset(match->pad2, '\0', sizeof match->pad2);
 }
 
+/* Converts the ofp11_match in 'match' into a cls_rule in 'rule', with the
+ * given 'priority'.  Returns 0 if successful, otherwise an OFPERR_* value. */
+enum ofperr
+ofputil_cls_rule_from_ofp11_match(const struct ofp11_match *match,
+                                  unsigned int priority,
+                                  struct cls_rule *rule)
+{
+    uint16_t wc = ntohl(match->wildcards);
+    uint8_t dl_src_mask[ETH_ADDR_LEN];
+    uint8_t dl_dst_mask[ETH_ADDR_LEN];
+    bool ipv4, arp;
+    int i;
+
+    cls_rule_init_catchall(rule, priority);
+
+    if (!(wc & OFPFW11_IN_PORT)) {
+        uint16_t ofp_port;
+        enum ofperr error;
+
+        error = ofputil_port_from_ofp11(match->in_port, &ofp_port);
+        if (error) {
+            return OFPERR_OFPBMC_BAD_VALUE;
+        }
+        cls_rule_set_in_port(rule, ofp_port);
+    }
+
+    for (i = 0; i < ETH_ADDR_LEN; i++) {
+        dl_src_mask[i] = ~match->dl_src_mask[i];
+    }
+    cls_rule_set_dl_src_masked(rule, match->dl_src, dl_src_mask);
+
+    for (i = 0; i < ETH_ADDR_LEN; i++) {
+        dl_dst_mask[i] = ~match->dl_dst_mask[i];
+    }
+    cls_rule_set_dl_dst_masked(rule, match->dl_dst, dl_dst_mask);
+
+    if (!(wc & OFPFW11_DL_VLAN)) {
+        if (match->dl_vlan == htons(OFPVID11_NONE)) {
+            /* Match only packets without a VLAN tag. */
+            rule->flow.vlan_tci = htons(0);
+            rule->wc.vlan_tci_mask = htons(UINT16_MAX);
+        } else {
+            if (match->dl_vlan == htons(OFPVID11_ANY)) {
+                /* Match any packet with a VLAN tag regardless of VID. */
+                rule->flow.vlan_tci = htons(VLAN_CFI);
+                rule->wc.vlan_tci_mask = htons(VLAN_CFI);
+            } else if (ntohs(match->dl_vlan) < 4096) {
+                /* Match only packets with the specified VLAN VID. */
+                rule->flow.vlan_tci = htons(VLAN_CFI) | match->dl_vlan;
+                rule->wc.vlan_tci_mask = htons(VLAN_CFI | VLAN_VID_MASK);
+            } else {
+                /* Invalid VID. */
+                return OFPERR_OFPBMC_BAD_VALUE;
+            }
+
+            if (!(wc & OFPFW11_DL_VLAN_PCP)) {
+                if (match->dl_vlan_pcp <= 7) {
+                    rule->flow.vlan_tci |= htons(match->dl_vlan_pcp
+                                                 << VLAN_PCP_SHIFT);
+                    rule->wc.vlan_tci_mask |= htons(VLAN_PCP_MASK);
+                } else {
+                    /* Invalid PCP. */
+                    return OFPERR_OFPBMC_BAD_VALUE;
+                }
+            }
+        }
+    }
+
+    if (!(wc & OFPFW11_DL_TYPE)) {
+        cls_rule_set_dl_type(rule,
+                             ofputil_dl_type_from_openflow(match->dl_type));
+    }
+
+    ipv4 = rule->flow.dl_type == htons(ETH_TYPE_IP);
+    arp = rule->flow.dl_type == htons(ETH_TYPE_ARP);
+
+    if (ipv4 && !(wc & OFPFW11_NW_TOS)) {
+        if (match->nw_tos & ~IP_DSCP_MASK) {
+            /* Invalid TOS. */
+            return OFPERR_OFPBMC_BAD_VALUE;
+        }
+
+        cls_rule_set_nw_dscp(rule, match->nw_tos);
+    }
+
+    if (ipv4 || arp) {
+        if (!(wc & OFPFW11_NW_PROTO)) {
+            cls_rule_set_nw_proto(rule, match->nw_proto);
+        }
+        cls_rule_set_nw_src_masked(rule, match->nw_src, ~match->nw_src_mask);
+        cls_rule_set_nw_dst_masked(rule, match->nw_dst, ~match->nw_dst_mask);
+    }
+
+#define OFPFW11_TP_ALL (OFPFW11_TP_SRC | OFPFW11_TP_DST)
+    if (ipv4 && (wc & OFPFW11_TP_ALL) != OFPFW11_TP_ALL) {
+        switch (rule->flow.nw_proto) {
+        case IPPROTO_ICMP:
+            /* "A.2.3 Flow Match Structures" in OF1.1 says:
+             *
+             *    The tp_src and tp_dst fields will be ignored unless the
+             *    network protocol specified is as TCP, UDP or SCTP.
+             *
+             * but I'm pretty sure we should support ICMP too, otherwise
+             * that's a regression from OF1.0. */
+            if (!(wc & OFPFW11_TP_SRC)) {
+                uint16_t icmp_type = ntohs(match->tp_src);
+                if (icmp_type < 0x100) {
+                    cls_rule_set_icmp_type(rule, icmp_type);
+                } else {
+                    return OFPERR_OFPBMC_BAD_FIELD;
+                }
+            }
+            if (!(wc & OFPFW11_TP_DST)) {
+                uint16_t icmp_code = ntohs(match->tp_dst);
+                if (icmp_code < 0x100) {
+                    cls_rule_set_icmp_code(rule, icmp_code);
+                } else {
+                    return OFPERR_OFPBMC_BAD_FIELD;
+                }
+            }
+            break;
+
+        case IPPROTO_TCP:
+        case IPPROTO_UDP:
+            if (!(wc & (OFPFW11_TP_SRC))) {
+                cls_rule_set_tp_src(rule, match->tp_src);
+            }
+            if (!(wc & (OFPFW11_TP_DST))) {
+                cls_rule_set_tp_dst(rule, match->tp_dst);
+            }
+            break;
+
+        case IPPROTO_SCTP:
+            /* We don't support SCTP and it seems that we should tell the
+             * controller, since OF1.1 implementations are supposed to. */
+            return OFPERR_OFPBMC_BAD_FIELD;
+
+        default:
+            /* OF1.1 says explicitly to ignore this. */
+            break;
+        }
+    }
+
+    if (rule->flow.dl_type == htons(ETH_TYPE_MPLS) ||
+        rule->flow.dl_type == htons(ETH_TYPE_MPLS_MCAST)) {
+        enum { OFPFW11_MPLS_ALL = OFPFW11_MPLS_LABEL | OFPFW11_MPLS_TC };
+
+        if ((wc & OFPFW11_MPLS_ALL) != OFPFW11_MPLS_ALL) {
+            /* MPLS not supported. */
+            return OFPERR_OFPBMC_BAD_TAG;
+        }
+    }
+
+    if (match->metadata_mask != htonll(UINT64_MAX)) {
+        /* Metadata field not yet supported because we haven't decided how to
+         * map it onto our existing fields (or whether to add a new field). */
+        return OFPERR_OFPBMC_BAD_FIELD;
+    }
+
+    return 0;
+}
+
+/* Convert 'rule' into the OpenFlow 1.1 match structure 'match'. */
+void
+ofputil_cls_rule_to_ofp11_match(const struct cls_rule *rule,
+                                struct ofp11_match *match)
+{
+    uint32_t wc = 0;
+    int i;
+
+    memset(match, 0, sizeof *match);
+    match->omh.type = htons(OFPMT_STANDARD);
+    match->omh.length = htons(OFPMT11_STANDARD_LENGTH);
+
+    if (rule->wc.wildcards & FWW_IN_PORT) {
+        wc |= OFPFW11_IN_PORT;
+    } else {
+        match->in_port = ofputil_port_to_ofp11(rule->flow.in_port);
+    }
+
+
+    memcpy(match->dl_src, rule->flow.dl_src, ETH_ADDR_LEN);
+    for (i = 0; i < ETH_ADDR_LEN; i++) {
+        match->dl_src_mask[i] = ~rule->wc.dl_src_mask[i];
+    }
+
+    memcpy(match->dl_dst, rule->flow.dl_dst, ETH_ADDR_LEN);
+    for (i = 0; i < ETH_ADDR_LEN; i++) {
+        match->dl_dst_mask[i] = ~rule->wc.dl_dst_mask[i];
+    }
+
+    if (rule->wc.vlan_tci_mask == htons(0)) {
+        wc |= OFPFW11_DL_VLAN | OFPFW11_DL_VLAN_PCP;
+    } else if (rule->wc.vlan_tci_mask & htons(VLAN_CFI)
+               && !(rule->flow.vlan_tci & htons(VLAN_CFI))) {
+        match->dl_vlan = htons(OFPVID11_NONE);
+        wc |= OFPFW11_DL_VLAN_PCP;
+    } else {
+        if (!(rule->wc.vlan_tci_mask & htons(VLAN_VID_MASK))) {
+            match->dl_vlan = htons(OFPVID11_ANY);
+        } else {
+            match->dl_vlan = htons(vlan_tci_to_vid(rule->flow.vlan_tci));
+        }
+
+        if (!(rule->wc.vlan_tci_mask & htons(VLAN_PCP_MASK))) {
+            wc |= OFPFW11_DL_VLAN_PCP;
+        } else {
+            match->dl_vlan_pcp = vlan_tci_to_pcp(rule->flow.vlan_tci);
+        }
+    }
+
+    if (rule->wc.wildcards & FWW_DL_TYPE) {
+        wc |= OFPFW11_DL_TYPE;
+    } else {
+        match->dl_type = ofputil_dl_type_to_openflow(rule->flow.dl_type);
+    }
+
+    if (rule->wc.wildcards & FWW_NW_DSCP) {
+        wc |= OFPFW11_NW_TOS;
+    } else {
+        match->nw_tos = rule->flow.nw_tos & IP_DSCP_MASK;
+    }
+
+    if (rule->wc.wildcards & FWW_NW_PROTO) {
+        wc |= OFPFW11_NW_PROTO;
+    } else {
+        match->nw_proto = rule->flow.nw_proto;
+    }
+
+    match->nw_src = rule->flow.nw_src;
+    match->nw_src_mask = ~rule->wc.nw_src_mask;
+    match->nw_dst = rule->flow.nw_dst;
+    match->nw_dst_mask = ~rule->wc.nw_dst_mask;
+
+    if (!rule->wc.tp_src_mask) {
+        wc |= OFPFW11_TP_SRC;
+    } else {
+        match->tp_src = rule->flow.tp_src;
+    }
+
+    if (!rule->wc.tp_dst_mask) {
+        wc |= OFPFW11_TP_DST;
+    } else {
+        match->tp_dst = rule->flow.tp_dst;
+    }
+
+    /* MPLS not supported. */
+    wc |= OFPFW11_MPLS_LABEL;
+    wc |= OFPFW11_MPLS_TC;
+
+    /* Metadata field not yet supported */
+    match->metadata_mask = htonll(UINT64_MAX);
+
+    match->wildcards = htonl(wc);
+}
+
 /* Given a 'dl_type' value in the format used in struct flow, returns the
- * corresponding 'dl_type' value for use in an OpenFlow ofp_match structure. */
+ * corresponding 'dl_type' value for use in an ofp10_match or ofp11_match
+ * structure. */
 ovs_be16
 ofputil_dl_type_to_openflow(ovs_be16 flow_dl_type)
 {
@@ -265,7 +529,7 @@ ofputil_dl_type_to_openflow(ovs_be16 flow_dl_type)
             : flow_dl_type);
 }
 
-/* Given a 'dl_type' value in the format used in an OpenFlow ofp_match
+/* Given a 'dl_type' value in the format used in an ofp10_match or ofp11_match
  * structure, returns the corresponding 'dl_type' value for use in struct
  * flow. */
 ovs_be16
@@ -1231,6 +1495,11 @@ ofputil_usable_protocols(const struct cls_rule *rule)
         return OFPUTIL_P_NXM_ANY;
     }
 
+    /* Only NXM supports non-CIDR IPv4 address masks. */
+    if (!ip_is_cidr(wc->nw_src_mask) || !ip_is_cidr(wc->nw_dst_mask)) {
+        return OFPUTIL_P_NXM_ANY;
+    }
+
     /* Only NXM supports bitwise matching on transport port. */
     if ((wc->tp_src_mask && wc->tp_src_mask != htons(UINT16_MAX)) ||
         (wc->tp_dst_mask && wc->tp_dst_mask != htons(UINT16_MAX))) {
@@ -1402,12 +1671,12 @@ ofputil_decode_flow_mod(struct ofputil_flow_mod *fm,
          * ofputil_normalize_rule() can put wildcards where the original flow
          * didn't have them. */
         priority = ntohs(ofm->priority);
-        if (!(ofm->match.wildcards & htonl(OFPFW_ALL))) {
+        if (!(ofm->match.wildcards & htonl(OFPFW10_ALL))) {
             priority = UINT16_MAX;
         }
 
         /* Translate the rule. */
-        ofputil_cls_rule_from_match(&ofm->match, priority, &fm->cr);
+        ofputil_cls_rule_from_ofp10_match(&ofm->match, priority, &fm->cr);
         ofputil_normalize_rule(&fm->cr);
 
         /* Translate the message. */
@@ -1487,7 +1756,7 @@ ofputil_encode_flow_mod(const struct ofputil_flow_mod *fm,
     case OFPUTIL_P_OF10_TID:
         msg = ofpbuf_new(sizeof *ofm + actions_len);
         ofm = put_openflow(sizeof *ofm, OFPT10_FLOW_MOD, msg);
-        ofputil_cls_rule_to_match(&fm->cr, &ofm->match);
+        ofputil_cls_rule_to_ofp10_match(&fm->cr, &ofm->match);
         ofm->cookie = fm->new_cookie;
         ofm->command = htons(command);
         ofm->idle_timeout = htons(fm->idle_timeout);
@@ -1505,7 +1774,8 @@ ofputil_encode_flow_mod(const struct ofputil_flow_mod *fm,
         nfm = msg->data;
         nfm->command = htons(command);
         nfm->cookie = fm->new_cookie;
-        match_len = nx_put_match(msg, &fm->cr, fm->cookie, fm->cookie_mask);
+        match_len = nx_put_match(msg, false, &fm->cr,
+                                 fm->cookie, fm->cookie_mask);
         nfm->idle_timeout = htons(fm->idle_timeout);
         nfm->hard_timeout = htons(fm->hard_timeout);
         nfm->priority = htons(fm->cr.priority);
@@ -1564,7 +1834,7 @@ ofputil_decode_ofpst_flow_request(struct ofputil_flow_stats_request *fsr,
         (const struct ofp_flow_stats_request *) oh;
 
     fsr->aggregate = aggregate;
-    ofputil_cls_rule_from_match(&ofsr->match, 0, &fsr->match);
+    ofputil_cls_rule_from_ofp10_match(&ofsr->match, 0, &fsr->match);
     fsr->out_port = ntohs(ofsr->out_port);
     fsr->table_id = ofsr->table_id;
     fsr->cookie = fsr->cookie_mask = htonll(0);
@@ -1651,7 +1921,7 @@ ofputil_encode_flow_stats_request(const struct ofputil_flow_stats_request *fsr,
 
         type = fsr->aggregate ? OFPST_AGGREGATE : OFPST_FLOW;
         ofsr = ofputil_make_stats_request(sizeof *ofsr, type, 0, &msg);
-        ofputil_cls_rule_to_match(&fsr->match, &ofsr->match);
+        ofputil_cls_rule_to_ofp10_match(&fsr->match, &ofsr->match);
         ofsr->table_id = fsr->table_id;
         ofsr->out_port = htons(fsr->out_port);
         break;
@@ -1665,7 +1935,7 @@ ofputil_encode_flow_stats_request(const struct ofputil_flow_stats_request *fsr,
 
         subtype = fsr->aggregate ? NXST_AGGREGATE : NXST_FLOW;
         ofputil_make_stats_request(sizeof *nfsr, OFPST_VENDOR, subtype, &msg);
-        match_len = nx_put_match(msg, &fsr->match,
+        match_len = nx_put_match(msg, false, &fsr->match,
                                  fsr->cookie, fsr->cookie_mask);
 
         nfsr = msg->data;
@@ -1762,8 +2032,8 @@ ofputil_decode_flow_stats_reply(struct ofputil_flow_stats *fs,
         }
 
         fs->cookie = get_32aligned_be64(&ofs->cookie);
-        ofputil_cls_rule_from_match(&ofs->match, ntohs(ofs->priority),
-                                    &fs->rule);
+        ofputil_cls_rule_from_ofp10_match(&ofs->match, ntohs(ofs->priority),
+                                          &fs->rule);
         fs->table_id = ofs->table_id;
         fs->duration_sec = ntohl(ofs->duration_sec);
         fs->duration_nsec = ntohl(ofs->duration_nsec);
@@ -1856,7 +2126,7 @@ ofputil_append_flow_stats_reply(const struct ofputil_flow_stats *fs,
         ofs->length = htons(len);
         ofs->table_id = fs->table_id;
         ofs->pad = 0;
-        ofputil_cls_rule_to_match(&fs->rule, &ofs->match);
+        ofputil_cls_rule_to_ofp10_match(&fs->rule, &ofs->match);
         ofs->duration_sec = htonl(fs->duration_sec);
         ofs->duration_nsec = htonl(fs->duration_nsec);
         ofs->priority = htons(fs->rule.priority);
@@ -1892,7 +2162,7 @@ ofputil_append_flow_stats_reply(const struct ofputil_flow_stats *fs,
         nfs->hard_age = htons(fs->hard_age < 0 ? 0
                               : fs->hard_age < UINT16_MAX ? fs->hard_age + 1
                               : UINT16_MAX);
-        nfs->match_len = htons(nx_put_match(msg, &fs->rule, 0, 0));
+        nfs->match_len = htons(nx_put_match(msg, false, &fs->rule, 0, 0));
         nfs->cookie = fs->cookie;
         nfs->packet_count = htonll(fs->packet_count);
         nfs->byte_count = htonll(fs->byte_count);
@@ -1952,8 +2222,8 @@ ofputil_decode_flow_removed(struct ofputil_flow_removed *fr,
         const struct ofp_flow_removed *ofr;
 
         ofr = (const struct ofp_flow_removed *) oh;
-        ofputil_cls_rule_from_match(&ofr->match, ntohs(ofr->priority),
-                                    &fr->rule);
+        ofputil_cls_rule_from_ofp10_match(&ofr->match, ntohs(ofr->priority),
+                                          &fr->rule);
         fr->cookie = ofr->cookie;
         fr->reason = ofr->reason;
         fr->duration_sec = ntohl(ofr->duration_sec);
@@ -2008,7 +2278,7 @@ ofputil_encode_flow_removed(const struct ofputil_flow_removed *fr,
 
         ofr = make_openflow_xid(sizeof *ofr, OFPT_FLOW_REMOVED, htonl(0),
                                 &msg);
-        ofputil_cls_rule_to_match(&fr->rule, &ofr->match);
+        ofputil_cls_rule_to_ofp10_match(&fr->rule, &ofr->match);
         ofr->cookie = fr->cookie;
         ofr->priority = htons(fr->rule.priority);
         ofr->reason = fr->reason;
@@ -2026,7 +2296,7 @@ ofputil_encode_flow_removed(const struct ofputil_flow_removed *fr,
         int match_len;
 
         make_nxmsg_xid(sizeof *nfr, NXT_FLOW_REMOVED, htonl(0), &msg);
-        match_len = nx_put_match(msg, &fr->rule, 0, 0);
+        match_len = nx_put_match(msg, false, &fr->rule, 0, 0);
 
         nfr = msg->data;
         nfr->cookie = fr->cookie;
@@ -2048,7 +2318,7 @@ ofputil_encode_flow_removed(const struct ofputil_flow_removed *fr,
     return msg;
 }
 
-int
+enum ofperr
 ofputil_decode_packet_in(struct ofputil_packet_in *pin,
                          const struct ofp_header *oh)
 {
@@ -2080,7 +2350,7 @@ ofputil_decode_packet_in(struct ofputil_packet_in *pin,
 
         npi = ofpbuf_pull(&b, sizeof *npi);
         error = nx_pull_match_loose(&b, ntohs(npi->match_len), 0, &rule, NULL,
-                              NULL);
+                                    NULL);
         if (error) {
             return error;
         }
@@ -2161,7 +2431,7 @@ ofputil_encode_packet_in(const struct ofputil_packet_in *pin,
         cls_rule_set_in_port(&rule, pin->fmd.in_port);
 
         ofpbuf_put_zeros(packet, sizeof *npi);
-        match_len = nx_put_match(packet, &rule, 0, 0);
+        match_len = nx_put_match(packet, false, &rule, 0, 0);
         ofpbuf_put_zeros(packet, 2);
         ofpbuf_put(packet, pin->packet, send_len);
 
@@ -3126,7 +3396,7 @@ make_flow_mod(uint16_t command, const struct cls_rule *rule,
     ofm->header.length = htons(size);
     ofm->cookie = 0;
     ofm->priority = htons(MIN(rule->priority, UINT16_MAX));
-    ofputil_cls_rule_to_match(rule, &ofm->match);
+    ofputil_cls_rule_to_ofp10_match(rule, &ofm->match);
     ofm->command = htons(command);
     return out;
 }
@@ -3141,32 +3411,6 @@ make_add_flow(const struct cls_rule *rule, uint32_t buffer_id,
     ofm->hard_timeout = htons(OFP_FLOW_PERMANENT);
     ofm->buffer_id = htonl(buffer_id);
     return out;
-}
-
-struct ofpbuf *
-make_del_flow(const struct cls_rule *rule)
-{
-    struct ofpbuf *out = make_flow_mod(OFPFC_DELETE_STRICT, rule, 0);
-    struct ofp_flow_mod *ofm = out->data;
-    ofm->out_port = htons(OFPP_NONE);
-    return out;
-}
-
-struct ofpbuf *
-make_add_simple_flow(const struct cls_rule *rule,
-                     uint32_t buffer_id, uint16_t out_port,
-                     uint16_t idle_timeout)
-{
-    if (out_port != OFPP_NONE) {
-        struct ofp_action_output *oao;
-        struct ofpbuf *buffer;
-
-        buffer = make_add_flow(rule, buffer_id, idle_timeout, sizeof *oao);
-        ofputil_put_OFPAT10_OUTPUT(buffer)->port = htons(out_port);
-        return buffer;
-    } else {
-        return make_add_flow(rule, buffer_id, idle_timeout, 0);
-    }
 }
 
 struct ofpbuf *

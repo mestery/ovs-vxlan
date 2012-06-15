@@ -175,7 +175,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
     {
         MFF_IPV4_SRC, "ip_src", "nw_src",
         MF_FIELD_SIZES(be32),
-        MFM_CIDR, 0,
+        MFM_FULLY, 0,
         MFS_IPV4,
         MFP_IPV4,
         true,
@@ -184,7 +184,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
     }, {
         MFF_IPV4_DST, "ip_dst", "nw_dst",
         MF_FIELD_SIZES(be32),
-        MFM_CIDR, 0,
+        MFM_FULLY, 0,
         MFS_IPV4,
         MFP_IPV4,
         true,
@@ -195,7 +195,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
     {
         MFF_IPV6_SRC, "ipv6_src", NULL,
         MF_FIELD_SIZES(ipv6),
-        MFM_CIDR, 0,
+        MFM_FULLY, 0,
         MFS_IPV6,
         MFP_IPV6,
         true,
@@ -204,7 +204,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
     }, {
         MFF_IPV6_DST, "ipv6_dst", NULL,
         MF_FIELD_SIZES(ipv6),
-        MFM_CIDR, 0,
+        MFM_FULLY, 0,
         MFS_IPV6,
         MFP_IPV6,
         true,
@@ -281,7 +281,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
     }, {
         MFF_ARP_SPA, "arp_spa", NULL,
         MF_FIELD_SIZES(be32),
-        MFM_CIDR, 0,
+        MFM_FULLY, 0,
         MFS_IPV4,
         MFP_ARP,
         false,
@@ -290,7 +290,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
     }, {
         MFF_ARP_TPA, "arp_tpa", NULL,
         MF_FIELD_SIZES(be32),
-        MFM_CIDR, 0,
+        MFM_FULLY, 0,
         MFS_IPV4,
         MFP_ARP,
         false,
@@ -407,7 +407,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
     {
         MFF_ND_TARGET, "nd_target", NULL,
         MF_FIELD_SIZES(ipv6),
-        MFM_CIDR, 0,
+        MFM_FULLY, 0,
         MFS_IPV6,
         MFP_ND,
         false,
@@ -441,6 +441,7 @@ struct nxm_field {
 };
 
 static struct hmap all_nxm_fields = HMAP_INITIALIZER(&all_nxm_fields);
+static struct hmap all_oxm_fields = HMAP_INITIALIZER(&all_oxm_fields);
 
 /* Rate limit for parse errors.  These always indicate a bug in an OpenFlow
  * controller and so there's not much point in showing a lot of them. */
@@ -476,15 +477,54 @@ mf_from_name(const char *name)
 }
 
 static void
-add_nxm_field(uint32_t nxm_header, const struct mf_field *mf)
+add_nxm_field(struct hmap *all_fields, uint32_t nxm_header,
+              const struct mf_field *mf)
 {
     struct nxm_field *f;
 
     f = xmalloc(sizeof *f);
-    hmap_insert(&all_nxm_fields, &f->hmap_node, hash_int(nxm_header, 0));
+    hmap_insert(all_fields, &f->hmap_node, hash_int(nxm_header, 0));
     f->nxm_header = nxm_header;
     f->mf = mf;
 }
+
+static struct hmap *
+get_all_fields(uint32_t header)
+{
+        return IS_OXM_HEADER(header) ? &all_oxm_fields : &all_nxm_fields;
+}
+
+static void
+nxm_init_add_field(const struct mf_field *mf, uint32_t header)
+{
+    struct hmap *all_fields = get_all_fields(header);
+
+    if (!header) {
+        return;
+    }
+    add_nxm_field(all_fields, header, mf);
+    if (mf->maskable == MFM_NONE) {
+        return;
+    }
+    add_nxm_field(all_fields, NXM_MAKE_WILD_HEADER(header), mf);
+}
+
+#ifndef NDEBUG
+static void
+nxm_init_verify_field(const struct mf_field *mf, uint32_t header)
+{
+    if (!header) {
+        return;
+    }
+    assert(mf_from_nxm_header(header) == mf);
+    /* Some OXM fields are not maskable while their NXM
+     * counterparts are, just skip this check for now */
+    if (mf->maskable == MFM_NONE || IS_OXM_HEADER(header)) {
+        return;
+    }
+    assert(mf_from_nxm_header(NXM_MAKE_WILD_HEADER(mf->nxm_header)) == mf);
+}
+#endif
 
 static void
 nxm_init(void)
@@ -492,24 +532,15 @@ nxm_init(void)
     const struct mf_field *mf;
 
     for (mf = mf_fields; mf < &mf_fields[MFF_N_IDS]; mf++) {
-        if (mf->nxm_header) {
-            add_nxm_field(mf->nxm_header, mf);
-            if (mf->maskable != MFM_NONE) {
-                add_nxm_field(NXM_MAKE_WILD_HEADER(mf->nxm_header), mf);
-            }
-        }
+        nxm_init_add_field(mf, mf->nxm_header);
+        nxm_init_add_field(mf, mf->oxm_header);
     }
 
 #ifndef NDEBUG
     /* Verify that the header values are unique. */
     for (mf = mf_fields; mf < &mf_fields[MFF_N_IDS]; mf++) {
-        if (mf->nxm_header) {
-            assert(mf_from_nxm_header(mf->nxm_header) == mf);
-            if (mf->maskable != MFM_NONE) {
-                assert(mf_from_nxm_header(NXM_MAKE_WILD_HEADER(mf->nxm_header))
-                       == mf);
-            }
-        }
+        nxm_init_verify_field(mf, mf->nxm_header);
+        nxm_init_verify_field(mf, mf->oxm_header);
     }
 #endif
 }
@@ -518,13 +549,13 @@ const struct mf_field *
 mf_from_nxm_header(uint32_t header)
 {
     const struct nxm_field *f;
+    struct hmap *all_fields = get_all_fields(header);
 
-    if (hmap_is_empty(&all_nxm_fields)) {
+    if (hmap_is_empty(all_fields)) {
         nxm_init();
     }
 
-    HMAP_FOR_EACH_IN_BUCKET (f, hmap_node, hash_int(header, 0),
-                             &all_nxm_fields) {
+    HMAP_FOR_EACH_IN_BUCKET (f, hmap_node, hash_int(header, 0), all_fields) {
         if (f->nxm_header == header) {
             return f->mf;
         }
@@ -783,11 +814,6 @@ mf_is_mask_valid(const struct mf_field *mf, const union mf_value *mask)
 
     case MFM_FULLY:
         return true;
-
-    case MFM_CIDR:
-        return (mf->n_bytes == 4
-                ? ip_is_cidr(mask->be32)
-                : ipv6_is_cidr(&mask->ipv6));
     }
 
     NOT_REACHED();
@@ -2060,12 +2086,14 @@ mf_from_ipv6_string(const struct mf_field *mf, const char *s,
 
     netmask = strtok_r(NULL, "/", &save_ptr);
     if (netmask) {
-        int prefix = atoi(netmask);
-        if (prefix <= 0 || prefix > 128) {
-            free(str);
-            return xasprintf("%s: prefix bits not between 1 and 128", s);
-        } else {
-            *mask = ipv6_create_mask(prefix);
+        if (inet_pton(AF_INET6, netmask, mask) != 1) {
+            int prefix = atoi(netmask);
+            if (prefix <= 0 || prefix > 128) {
+                free(str);
+                return xasprintf("%s: prefix bits not between 1 and 128", s);
+            } else {
+                *mask = ipv6_create_mask(prefix);
+            }
         }
     } else {
         *mask = in6addr_exact;
