@@ -637,8 +637,8 @@ parse_tunnel_config(const char *name, const char *type,
             } else {
                 nl_msg_put_u8(options, OVS_TUNNEL_ATTR_TTL, atoi(node->value));
             }
-        } else if (!strcmp(node->name, "csum") && supports_csum) {
-            if (!strcmp(node->data, "true")) {
+        } else if (!strcmp(node->key, "csum") && supports_csum) {
+            if (!strcmp(node->value, "true")) {
                 flags |= TNL_F_CSUM;
             }
         } else if (!strcmp(node->key, "df_inherit")) {
