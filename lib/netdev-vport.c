@@ -590,7 +590,7 @@ parse_tunnel_config(const char *name, const char *type,
 {
     bool supports_csum;
     bool is_ipsec;
-    struct shash_node *node;
+    struct smap_node *node;
     bool ipsec_mech_set = false;
     ovs_be32 daddr = htonl(0);
     ovs_be32 saddr = htonl(0);
