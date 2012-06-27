@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2012 Nicira Networks.
+ * Copyright (c) 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -177,7 +177,15 @@ learn_check(const struct nx_action_learn *learn, const struct flow *flow)
 
             if (dst_type == NX_LEARN_DST_MATCH
                 && src_type == NX_LEARN_SRC_IMMEDIATE) {
-                mf_set_subfield(&dst, value, &rule);
+                if (n_bits <= 64) {
+                    mf_set_subfield(&dst, value, &rule);
+                } else {
+                    /* We're only setting subfields to allow us to check
+                     * prerequisites.  No prerequisite depends on the value of
+                     * a field that is wider than 64 bits.  So just skip
+                     * setting it entirely. */
+                    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 12);
+                }
             }
         }
     }
@@ -196,8 +204,9 @@ learn_execute(const struct nx_action_learn *learn, const struct flow *flow,
     struct ofpbuf actions;
 
     cls_rule_init_catchall(&fm->cr, ntohs(learn->priority));
-    fm->cookie = learn->cookie;
-    fm->cookie_mask = htonll(UINT64_MAX);
+    fm->cookie = htonll(0);
+    fm->cookie_mask = htonll(0);
+    fm->new_cookie = learn->cookie;
     fm->table_id = learn->table_id;
     fm->command = OFPFC_MODIFY_STRICT;
     fm->idle_timeout = ntohs(learn->idle_timeout);
@@ -223,10 +232,10 @@ learn_execute(const struct nx_action_learn *learn, const struct flow *flow,
         int n_bits = header & NX_LEARN_N_BITS_MASK;
         int src_type = header & NX_LEARN_SRC_MASK;
         int dst_type = header & NX_LEARN_DST_MASK;
-        uint64_t value;
+        union mf_subvalue value;
 
-        struct nx_action_reg_load *load;
         struct mf_subfield dst;
+        int chunk, ofs;
 
         if (!header) {
             break;
@@ -236,27 +245,43 @@ learn_execute(const struct nx_action_learn *learn, const struct flow *flow,
             struct mf_subfield src;
 
             get_subfield(n_bits, &p, &src);
-            value = mf_get_subfield(&src, flow);
+            mf_read_subfield(&src, flow, &value);
         } else {
-            value = get_bits(n_bits, &p);
+            int p_bytes = 2 * DIV_ROUND_UP(n_bits, 16);
+
+            memset(&value, 0, sizeof value);
+            bitwise_copy(p, p_bytes, 0,
+                         &value, sizeof value, 0,
+                         n_bits);
+            p = (const uint8_t *) p + p_bytes;
         }
 
         switch (dst_type) {
         case NX_LEARN_DST_MATCH:
             get_subfield(n_bits, &p, &dst);
-            mf_set_subfield(&dst, value, &fm->cr);
+            mf_write_subfield(&dst, &value, &fm->cr);
             break;
 
         case NX_LEARN_DST_LOAD:
             get_subfield(n_bits, &p, &dst);
-            load = ofputil_put_NXAST_REG_LOAD(&actions);
-            load->ofs_nbits = nxm_encode_ofs_nbits(dst.ofs, dst.n_bits);
-            load->dst = htonl(dst.field->nxm_header);
-            load->value = htonll(value);
+            for (ofs = 0; ofs < n_bits; ofs += chunk) {
+                struct nx_action_reg_load *load;
+
+                chunk = MIN(n_bits - ofs, 64);
+
+                load = ofputil_put_NXAST_REG_LOAD(&actions);
+                load->ofs_nbits = nxm_encode_ofs_nbits(dst.ofs + ofs, chunk);
+                load->dst = htonl(dst.field->nxm_header);
+                bitwise_copy(&value, sizeof value, ofs,
+                             &load->value, sizeof load->value, 0,
+                             chunk);
+            }
             break;
 
         case NX_LEARN_DST_OUTPUT:
-            ofputil_put_OFPAT10_OUTPUT(&actions)->port = htons(value);
+            if (n_bits <= 16 || is_all_zeros(value.u8, sizeof value - 2)) {
+                ofputil_put_OFPAT10_OUTPUT(&actions)->port = value.be16[7];
+            }
             break;
         }
     }
@@ -294,11 +319,61 @@ struct learn_spec {
 
     int src_type;
     struct mf_subfield src;
-    uint8_t src_imm[sizeof(union mf_value)];
+    union mf_subvalue src_imm;
 
     int dst_type;
     struct mf_subfield dst;
 };
+
+static void
+learn_parse_load_immediate(const char *s, struct learn_spec *spec)
+{
+    const char *full_s = s;
+    const char *arrow = strstr(s, "->");
+    struct mf_subfield dst;
+    union mf_subvalue imm;
+
+    memset(&imm, 0, sizeof imm);
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X') && arrow) {
+        const char *in = arrow - 1;
+        uint8_t *out = imm.u8 + sizeof imm.u8 - 1;
+        int n = arrow - (s + 2);
+        int i;
+
+        for (i = 0; i < n; i++) {
+            int hexit = hexit_value(in[-i]);
+            if (hexit < 0) {
+                ovs_fatal(0, "%s: bad hex digit in value", full_s);
+            }
+            out[-(i / 2)] |= i % 2 ? hexit << 4 : hexit;
+        }
+        s = arrow;
+    } else {
+        imm.be64[1] = htonll(strtoull(s, (char **) &s, 0));
+    }
+
+    if (strncmp(s, "->", 2)) {
+        ovs_fatal(0, "%s: missing `->' following value", full_s);
+    }
+    s += 2;
+
+    s = mf_parse_subfield(&dst, s);
+    if (*s != '\0') {
+        ovs_fatal(0, "%s: trailing garbage following destination", full_s);
+    }
+
+    if (!bitwise_is_all_zeros(&imm, sizeof imm, dst.n_bits,
+                              (8 * sizeof imm) - dst.n_bits)) {
+        ovs_fatal(0, "%s: value does not fit into %u bits",
+                  full_s, dst.n_bits);
+    }
+
+    spec->n_bits = dst.n_bits;
+    spec->src_type = NX_LEARN_SRC_IMMEDIATE;
+    spec->src_imm = imm;
+    spec->dst_type = NX_LEARN_DST_LOAD;
+    spec->dst = dst;
+}
 
 static void
 learn_parse_spec(const char *orig, char *name, char *value,
@@ -317,7 +392,9 @@ learn_parse_spec(const char *orig, char *name, char *value,
 
         spec->n_bits = dst->n_bits;
         spec->src_type = NX_LEARN_SRC_IMMEDIATE;
-        memcpy(spec->src_imm, &imm, dst->n_bytes);
+        memset(&spec->src_imm, 0, sizeof spec->src_imm);
+        memcpy(&spec->src_imm.u8[sizeof spec->src_imm - dst->n_bytes],
+               &imm, dst->n_bytes);
         spec->dst_type = NX_LEARN_DST_MATCH;
         spec->dst.field = dst;
         spec->dst.ofs = 0;
@@ -349,23 +426,7 @@ learn_parse_spec(const char *orig, char *name, char *value,
         spec->dst_type = NX_LEARN_DST_MATCH;
     } else if (!strcmp(name, "load")) {
         if (value[strcspn(value, "[-")] == '-') {
-            struct nx_action_reg_load load;
-            int nbits, imm_bytes;
-            uint64_t imm;
-            int i;
-
-            nxm_parse_reg_load(&load, value);
-            nbits = nxm_decode_n_bits(load.ofs_nbits);
-            imm_bytes = DIV_ROUND_UP(nbits, 8);
-            imm = ntohll(load.value);
-
-            spec->n_bits = nbits;
-            spec->src_type = NX_LEARN_SRC_IMMEDIATE;
-            for (i = 0; i < imm_bytes; i++) {
-                spec->src_imm[i] = imm >> ((imm_bytes - i - 1) * 8);
-            }
-            spec->dst_type = NX_LEARN_DST_LOAD;
-            nxm_decode(&spec->dst, load.dst, load.ofs_nbits);
+            learn_parse_load_immediate(value, spec);
         } else {
             struct nx_action_reg_move move;
 
@@ -469,23 +530,16 @@ learn_parse(struct ofpbuf *b, char *arg, const struct flow *flow)
             /* Update 'rule' to allow for satisfying destination
              * prerequisites. */
             if (spec.src_type == NX_LEARN_SRC_IMMEDIATE
-                && spec.dst_type == NX_LEARN_DST_MATCH
-                && spec.dst.ofs == 0
-                && spec.n_bits == spec.dst.field->n_bytes * 8) {
-                union mf_value imm;
-
-                memcpy(&imm, spec.src_imm, spec.dst.field->n_bytes);
-                mf_set_value(spec.dst.field, &imm, &rule);
+                && spec.dst_type == NX_LEARN_DST_MATCH) {
+                mf_write_subfield(&spec.dst, &spec.src_imm, &rule);
             }
 
             /* Output the flow_mod_spec. */
             put_u16(b, spec.n_bits | spec.src_type | spec.dst_type);
             if (spec.src_type == NX_LEARN_SRC_IMMEDIATE) {
-                int n_bytes = DIV_ROUND_UP(spec.n_bits, 8);
-                if (n_bytes % 2) {
-                    ofpbuf_put_zeros(b, 1);
-                }
-                ofpbuf_put(b, spec.src_imm, n_bytes);
+                int n_bytes = DIV_ROUND_UP(spec.n_bits, 16) * 2;
+                int ofs = sizeof spec.src_imm - n_bytes;
+                ofpbuf_put(b, &spec.src_imm.u8[ofs], n_bytes);
             } else {
                 put_u32(b, spec.src.field->nxm_header);
                 put_u16(b, spec.src.ofs);

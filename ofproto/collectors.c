@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -63,8 +63,7 @@ collectors_create(const struct sset *targets, uint16_t default_port,
         int error;
         int fd;
 
-        error = inet_open_active(SOCK_DGRAM, name, default_port, NULL, &fd,
-                                 DSCP_INVALID);
+        error = inet_open_active(SOCK_DGRAM, name, default_port, NULL, &fd, 0);
         if (fd >= 0) {
             c->fds[c->n_fds++] = fd;
         } else {

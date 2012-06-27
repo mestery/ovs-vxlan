@@ -1,4 +1,4 @@
-/* Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira Networks
+/* Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,12 +34,14 @@
 #include "dpif.h"
 #include "dummy.h"
 #include "leak-checker.h"
+#include "memory.h"
 #include "netdev.h"
 #include "openflow/openflow.h"
 #include "ovsdb-idl.h"
 #include "poll-loop.h"
 #include "process.h"
 #include "signals.h"
+#include "simap.h"
 #include "stream-ssl.h"
 #include "stream.h"
 #include "stress.h"
@@ -93,6 +95,15 @@ main(int argc, char *argv[])
         if (signal_poll(sighup)) {
             vlog_reopen_log_file();
         }
+        memory_run();
+        if (memory_should_report()) {
+            struct simap usage;
+
+            simap_init(&usage);
+            bridge_get_memory_usage(&usage);
+            memory_report(&usage);
+            simap_destroy(&usage);
+        }
         bridge_run_fast();
         bridge_run();
         bridge_run_fast();
@@ -100,6 +111,7 @@ main(int argc, char *argv[])
         netdev_run();
 
         signal_wait(sighup);
+        memory_wait();
         bridge_wait();
         unixctl_server_wait(unixctl);
         netdev_wait();

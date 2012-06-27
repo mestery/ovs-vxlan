@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -755,6 +755,7 @@ ssl_wait(struct stream *stream, enum stream_wait_type wait)
 
 const struct stream_class ssl_stream_class = {
     "ssl",                      /* name */
+    true,                       /* needs_probes */
     ssl_open,                   /* open */
     ssl_close,                  /* close */
     ssl_connect,                /* connect */
@@ -861,6 +862,7 @@ pssl_wait(struct pstream *pstream)
 
 const struct pstream_class pssl_pstream_class = {
     "pssl",
+    true,
     pssl_open,
     pssl_close,
     pssl_accept,

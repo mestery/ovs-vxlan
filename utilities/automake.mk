@@ -13,10 +13,14 @@ bin_SCRIPTS += \
 	utilities/ovs-vlan-test
 endif
 noinst_SCRIPTS += utilities/ovs-pki-cgi
-scripts_SCRIPTS += utilities/ovs-ctl utilities/ovs-save
+scripts_SCRIPTS += \
+	utilities/ovs-check-dead-ifs \
+	utilities/ovs-ctl \
+	utilities/ovs-save
 scripts_DATA += utilities/ovs-lib
 
 EXTRA_DIST += \
+	utilities/ovs-check-dead-ifs.in \
 	utilities/ovs-ctl.in \
 	utilities/ovs-lib.in \
 	utilities/ovs-parse-leaks.in \
@@ -47,6 +51,7 @@ DISTCLEANFILES += \
 	utilities/ovs-appctl.8 \
 	utilities/ovs-ctl \
 	utilities/ovs-benchmark.1 \
+	utilities/ovs-check-dead-ifs \
 	utilities/ovs-controller.8 \
 	utilities/ovs-dpctl.8 \
 	utilities/ovs-lib \

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -121,7 +121,7 @@ send_bogus_packet_ins(struct fail_open *fo)
 
     ofpbuf_init(&b, 128);
     eth_addr_nicira_random(mac);
-    compose_benign_packet(&b, "Open vSwitch Controller Probe", 0xa033, mac);
+    compose_rarp(&b, mac);
 
     memset(&pin, 0, sizeof pin);
     pin.packet = b.data;

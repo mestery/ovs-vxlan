@@ -1,4 +1,4 @@
-# Copyright (c) 2010, 2011, 2012 Nicira Networks
+# Copyright (c) 2010, 2011, 2012 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -112,7 +112,9 @@ class Reconnect(object):
 
         @staticmethod
         def deadline(fsm):
-            return fsm.state_entered + fsm.probe_interval
+            if fsm.probe_interval:
+                return fsm.state_entered + fsm.probe_interval
+            return None
 
         @staticmethod
         def run(fsm, now):
@@ -504,7 +506,9 @@ class Reconnect(object):
               connection is indeed in working order.  (This will only be
               returned if the "probe interval" is nonzero--see
               self.set_probe_interval())."""
-        if now >= self.state.deadline(self):
+
+        deadline = self.state.deadline(self)
+        if deadline is not None and now >= deadline:
             return self.state.run(self, now)
         else:
             return None

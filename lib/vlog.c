@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -477,6 +477,7 @@ vlog_unixctl_reopen(struct unixctl_conn *conn, int argc OVS_UNUSED,
 void
 vlog_init(void)
 {
+    static char *program_name_copy;
     time_t now;
 
     if (vlog_inited) {
@@ -484,7 +485,13 @@ vlog_init(void)
     }
     vlog_inited = true;
 
-    openlog(program_name, LOG_NDELAY, LOG_DAEMON);
+    /* openlog() is allowed to keep the pointer passed in, without making a
+     * copy.  The daemonize code sometimes frees and replaces 'program_name',
+     * so make a private copy just for openlog().  (We keep a pointer to the
+     * private copy to suppress memory leak warnings in case openlog() does
+     * make its own copy.) */
+    program_name_copy = program_name ? xstrdup(program_name) : NULL;
+    openlog(program_name_copy, LOG_NDELAY, LOG_DAEMON);
 
     now = time_wall();
     if (now < 0) {
@@ -762,28 +769,15 @@ vlog_should_drop(const struct vlog_module *module, enum vlog_level level,
         return true;
     }
 
-    if (rl->tokens < VLOG_MSG_TOKENS) {
+    if (!token_bucket_withdraw(&rl->token_bucket, VLOG_MSG_TOKENS)) {
         time_t now = time_now();
-        if (rl->last_fill > now) {
-            /* Last filled in the future?  Time must have gone backward, or
-             * 'rl' has not been used before. */
-            rl->tokens = rl->burst;
-        } else if (rl->last_fill < now) {
-            unsigned int add = sat_mul(rl->rate, now - rl->last_fill);
-            unsigned int tokens = sat_add(rl->tokens, add);
-            rl->tokens = MIN(tokens, rl->burst);
-            rl->last_fill = now;
+        if (!rl->n_dropped) {
+            rl->first_dropped = now;
         }
-        if (rl->tokens < VLOG_MSG_TOKENS) {
-            if (!rl->n_dropped) {
-                rl->first_dropped = now;
-            }
-            rl->last_dropped = now;
-            rl->n_dropped++;
-            return true;
-        }
+        rl->last_dropped = now;
+        rl->n_dropped++;
+        return true;
     }
-    rl->tokens -= VLOG_MSG_TOKENS;
 
     if (rl->n_dropped) {
         time_t now = time_now();

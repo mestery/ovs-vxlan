@@ -1,4 +1,4 @@
-# Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira Networks
+# Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # limitations under the License.
 
 AC_PREREQ(2.64)
-AC_INIT(openvswitch, 1.6.90, ovs-bugs@openvswitch.org)
+AC_INIT(openvswitch, 1.7.90, ovs-bugs@openvswitch.org)
 AC_CONFIG_SRCDIR([datapath/datapath.c])
 AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_AUX_DIR([build-aux])

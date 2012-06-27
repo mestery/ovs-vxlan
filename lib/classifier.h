@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -48,6 +48,7 @@ struct cls_table {
     struct hmap rules;          /* Contains "struct cls_rule"s. */
     struct flow_wildcards wc;   /* Wildcards for fields. */
     int n_table_rules;          /* Number of rules, including duplicates. */
+    bool is_catchall;           /* True if this table wildcards every field. */
 };
 
 /* Returns true if 'table' is a "catch-all" table that will match every
@@ -55,11 +56,7 @@ struct cls_table {
 static inline bool
 cls_table_is_catchall(const struct cls_table *table)
 {
-    /* A catch-all table can only have one rule, so use hmap_count() as a cheap
-     * check to rule out other kinds of match before doing the full check with
-     * flow_wildcards_is_catchall(). */
-    return (hmap_count(&table->rules) == 1
-            && flow_wildcards_is_catchall(&table->wc));
+    return table->is_catchall;
 }
 
 /* A flow classification rule.
@@ -93,12 +90,17 @@ void cls_rule_zero_wildcarded_fields(struct cls_rule *);
 void cls_rule_set_reg(struct cls_rule *, unsigned int reg_idx, uint32_t value);
 void cls_rule_set_reg_masked(struct cls_rule *, unsigned int reg_idx,
                              uint32_t value, uint32_t mask);
+void cls_rule_set_metadata(struct cls_rule *, ovs_be64 metadata);
+void cls_rule_set_metadata_masked(struct cls_rule *, ovs_be64 metadata,
+                                  ovs_be64 mask);
 void cls_rule_set_tun_id(struct cls_rule *, ovs_be64 tun_id);
 void cls_rule_set_tun_id_masked(struct cls_rule *,
                                 ovs_be64 tun_id, ovs_be64 mask);
 void cls_rule_set_in_port(struct cls_rule *, uint16_t ofp_port);
 void cls_rule_set_dl_type(struct cls_rule *, ovs_be16);
 void cls_rule_set_dl_src(struct cls_rule *, const uint8_t[6]);
+void cls_rule_set_dl_src_masked(struct cls_rule *, const uint8_t dl_src[6],
+                                const uint8_t mask[6]);
 void cls_rule_set_dl_dst(struct cls_rule *, const uint8_t[6]);
 void cls_rule_set_dl_dst_masked(struct cls_rule *, const uint8_t dl_dst[6],
                                 const uint8_t mask[6]);
@@ -138,6 +140,8 @@ void cls_rule_set_ipv6_dst_masked(struct cls_rule *, const struct in6_addr *,
                                   const struct in6_addr *);
 void cls_rule_set_ipv6_label(struct cls_rule *, ovs_be32);
 void cls_rule_set_nd_target(struct cls_rule *, const struct in6_addr *);
+void cls_rule_set_nd_target_masked(struct cls_rule *, const struct in6_addr *,
+                                   const struct in6_addr *);
 
 bool cls_rule_equal(const struct cls_rule *, const struct cls_rule *);
 uint32_t cls_rule_hash(const struct cls_rule *, uint32_t basis);

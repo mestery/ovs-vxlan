@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,6 +33,7 @@
 #include "pktbuf.h"
 #include "rconn.h"
 #include "shash.h"
+#include "simap.h"
 #include "stream.h"
 #include "timeval.h"
 #include "vconn.h"
@@ -338,6 +339,30 @@ connmgr_wait(struct connmgr *mgr, bool handling_openflow)
     }
 }
 
+/* Adds some memory usage statistics for 'mgr' into 'usage', for use with
+ * memory_report(). */
+void
+connmgr_get_memory_usage(const struct connmgr *mgr, struct simap *usage)
+{
+    const struct ofconn *ofconn;
+    unsigned int packets = 0;
+    unsigned int ofconns = 0;
+
+    LIST_FOR_EACH (ofconn, node, &mgr->all_conns) {
+        int i;
+
+        ofconns++;
+
+        packets += rconn_count_txqlen(ofconn->rconn);
+        for (i = 0; i < N_SCHEDULERS; i++) {
+            packets += pinsched_count_txqlen(ofconn->schedulers[i]);
+        }
+        packets += pktbuf_count_packets(ofconn->pktbuf);
+    }
+    simap_increase(usage, "ofconns", ofconns);
+    simap_increase(usage, "packets", packets);
+}
+
 /* Returns the ofproto that owns 'ofconn''s connmgr. */
 struct ofproto *
 ofconn_get_ofproto(const struct ofconn *ofconn)
@@ -467,10 +492,14 @@ connmgr_set_controllers(struct connmgr *mgr,
 
         if (!vconn_verify_name(c->target)) {
             if (!find_controller_by_target(mgr, c->target)) {
+                VLOG_INFO("%s: added primary controller \"%s\"",
+                          mgr->name, c->target);
                 add_controller(mgr, c->target, c->dscp);
             }
         } else if (!pvconn_verify_name(c->target)) {
             if (!ofservice_lookup(mgr, c->target)) {
+                VLOG_INFO("%s: added service controller \"%s\"",
+                          mgr->name, c->target);
                 ofservice_create(mgr, c->target, c->dscp);
             }
         } else {
@@ -485,10 +514,13 @@ connmgr_set_controllers(struct connmgr *mgr,
     /* Delete controllers that are no longer configured.
      * Update configuration of all now-existing controllers. */
     HMAP_FOR_EACH_SAFE (ofconn, next_ofconn, hmap_node, &mgr->controllers) {
+        const char *target = ofconn_get_target(ofconn);
         struct ofproto_controller *c;
 
-        c = shash_find_data(&new_controllers, ofconn_get_target(ofconn));
+        c = shash_find_data(&new_controllers, target);
         if (!c) {
+            VLOG_INFO("%s: removed primary controller \"%s\"",
+                      mgr->name, target);
             ofconn_destroy(ofconn);
         } else {
             ofconn_reconfigure(ofconn, c);
@@ -498,11 +530,13 @@ connmgr_set_controllers(struct connmgr *mgr,
     /* Delete services that are no longer configured.
      * Update configuration of all now-existing services. */
     HMAP_FOR_EACH_SAFE (ofservice, next_ofservice, node, &mgr->services) {
+        const char *target = pvconn_get_name(ofservice->pvconn);
         struct ofproto_controller *c;
 
-        c = shash_find_data(&new_controllers,
-                            pvconn_get_name(ofservice->pvconn));
+        c = shash_find_data(&new_controllers, target);
         if (!c) {
+            VLOG_INFO("%s: removed service controller \"%s\"",
+                      mgr->name, target);
             ofservice_destroy(mgr, ofservice);
         } else {
             ofservice_reconfigure(ofservice, c);
@@ -674,7 +708,7 @@ set_pvconns(struct pvconn ***pvconnsp, size_t *n_pvconnsp,
         struct pvconn *pvconn;
         int error;
 
-        error = pvconn_open(name, &pvconn, DSCP_INVALID);
+        error = pvconn_open(name, &pvconn, 0);
         if (!error) {
             pvconns[n_pvconns++] = pvconn;
         } else {
@@ -1080,6 +1114,12 @@ ofconn_reconfigure(struct ofconn *ofconn, const struct ofproto_controller *c)
     rconn_set_probe_interval(ofconn->rconn, probe_interval);
 
     ofconn_set_rate_limit(ofconn, c->rate_limit, c->burst_limit);
+
+    /* If dscp value changed reconnect. */
+    if (c->dscp != rconn_get_dscp(ofconn->rconn)) {
+        rconn_set_dscp(ofconn->rconn, c->dscp);
+        rconn_reconnect(ofconn->rconn);
+    }
 }
 
 /* Returns true if it makes sense for 'ofconn' to receive and process OpenFlow
@@ -1225,9 +1265,7 @@ ofconn_send(const struct ofconn *ofconn, struct ofpbuf *msg,
             struct rconn_packet_counter *counter)
 {
     update_openflow_length(msg);
-    if (rconn_send(ofconn->rconn, msg, counter)) {
-        ofpbuf_delete(msg);
-    }
+    rconn_send(ofconn->rconn, msg, counter);
 }
 
 /* Sending asynchronous messages. */

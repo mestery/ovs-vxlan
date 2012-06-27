@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -224,6 +224,12 @@ void
 rconn_set_dscp(struct rconn *rc, uint8_t dscp)
 {
     rc->dscp = dscp;
+}
+
+uint8_t
+rconn_get_dscp(const struct rconn *rc)
+{
+    return rc->dscp;
 }
 
 void
@@ -560,9 +566,8 @@ rconn_recv_wait(struct rconn *rc)
     }
 }
 
-/* Sends 'b' on 'rc'.  Returns 0 if successful (in which case 'b' is
- * destroyed), or ENOTCONN if 'rc' is not currently connected (in which case
- * the caller retains ownership of 'b').
+/* Sends 'b' on 'rc'.  Returns 0 if successful, or ENOTCONN if 'rc' is not
+ * currently connected.  Takes ownership of 'b'.
  *
  * If 'counter' is non-null, then 'counter' will be incremented while the
  * packet is in flight, then decremented when it has been sent (or discarded
@@ -595,6 +600,7 @@ rconn_send(struct rconn *rc, struct ofpbuf *b,
         }
         return 0;
     } else {
+        ofpbuf_delete(b);
         return ENOTCONN;
     }
 }
@@ -619,7 +625,6 @@ rconn_send_with_limit(struct rconn *rc, struct ofpbuf *b,
     retval = counter->n >= queue_limit ? EAGAIN : rconn_send(rc, b, counter);
     if (retval) {
         COVERAGE_INC(rconn_overflow);
-        ofpbuf_delete(b);
     }
     return retval;
 }
@@ -855,6 +860,13 @@ int
 rconn_get_last_error(const struct rconn *rc)
 {
     return rc->last_error;
+}
+
+/* Returns the number of messages queued for transmission on 'rc'. */
+unsigned int
+rconn_count_txqlen(const struct rconn *rc)
+{
+    return list_size(&rc->txq);
 }
 
 struct rconn_packet_counter *

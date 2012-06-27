@@ -5,7 +5,7 @@
 # chkconfig: 2345 09 91
 # description: Manage Open vSwitch kernel modules and user-space daemons
 
-# Copyright (C) 2009, 2010, 2011 Nicira Networks, Inc.
+# Copyright (C) 2009, 2010, 2011 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -76,6 +76,7 @@ start () {
         touch /var/run/openvswitch.booted
         set "$@" --delete-bridges
     fi
+    set "$@" $OVS_CTL_OPTS
     "$@"
 
     start_ovs_xapi_sync

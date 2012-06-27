@@ -1,5 +1,5 @@
 #!/usr/bin/python
-# Copyright (c) 2009, 2010, 2011 Nicira Networks
+# Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -39,6 +39,7 @@ import ovs.util
 import ovs.daemon
 import ovs.db.idl
 import ovs.unixctl
+import ovs.unixctl.server
 import ovs.vlog
 
 vlog = ovs.vlog.Vlog("ovs-monitor-ipsec")
@@ -436,24 +437,27 @@ def main():
     ovs.daemon.daemonize()
 
     ovs.unixctl.command_register("exit", "", 0, 0, unixctl_exit, None)
-    error, unixctl_server = ovs.unixctl.UnixctlServer.create(None)
+    error, unixctl_server = ovs.unixctl.server.UnixctlServer.create(None)
     if error:
         ovs.util.ovs_fatal(error, "could not create unixctl server", vlog)
 
     ipsec = IPsec()
 
     interfaces = {}
+    seqno = idl.change_seqno    # Sequence number when we last processed the db
     while True:
         unixctl_server.run()
         if exiting:
             break
 
-        if not idl.run():
+        idl.run()
+        if seqno == idl.change_seqno:
             poller = ovs.poller.Poller()
             unixctl_server.wait(poller)
             idl.wait(poller)
             poller.block()
             continue
+        seqno = idl.change_seqno
 
         ssl_cert = get_ssl_cert(idl.tables)
 

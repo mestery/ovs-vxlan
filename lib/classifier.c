@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -119,6 +119,20 @@ cls_rule_set_reg_masked(struct cls_rule *rule, unsigned int reg_idx,
 }
 
 void
+cls_rule_set_metadata(struct cls_rule *rule, ovs_be64 metadata)
+{
+    cls_rule_set_metadata_masked(rule, metadata, htonll(UINT64_MAX));
+}
+
+void
+cls_rule_set_metadata_masked(struct cls_rule *rule, ovs_be64 metadata,
+                             ovs_be64 mask)
+{
+    rule->wc.metadata_mask = mask;
+    rule->flow.metadata = metadata & mask;
+}
+
+void
 cls_rule_set_tun_id(struct cls_rule *rule, ovs_be64 tun_id)
 {
     cls_rule_set_tun_id_masked(rule, tun_id, htonll(UINT64_MAX));
@@ -149,16 +163,31 @@ cls_rule_set_dl_type(struct cls_rule *rule, ovs_be16 dl_type)
 void
 cls_rule_set_dl_src(struct cls_rule *rule, const uint8_t dl_src[ETH_ADDR_LEN])
 {
-    rule->wc.wildcards &= ~FWW_DL_SRC;
     memcpy(rule->flow.dl_src, dl_src, ETH_ADDR_LEN);
+    memset(rule->wc.dl_src_mask, 0xff, ETH_ADDR_LEN);
+}
+
+/* Modifies 'rule' so that the Ethernet address must match 'dl_src' after each
+ * byte is ANDed with the appropriate byte in 'mask'. */
+void
+cls_rule_set_dl_src_masked(struct cls_rule *rule,
+                           const uint8_t dl_src[ETH_ADDR_LEN],
+                           const uint8_t mask[ETH_ADDR_LEN])
+{
+    size_t i;
+
+    for (i = 0; i < ETH_ADDR_LEN; i++) {
+        rule->flow.dl_src[i] = dl_src[i] & mask[i];
+        rule->wc.dl_src_mask[i] = mask[i];
+    }
 }
 
 /* Modifies 'rule' so that the Ethernet address must match 'dl_dst' exactly. */
 void
 cls_rule_set_dl_dst(struct cls_rule *rule, const uint8_t dl_dst[ETH_ADDR_LEN])
 {
-    rule->wc.wildcards &= ~(FWW_DL_DST | FWW_ETH_MCAST);
     memcpy(rule->flow.dl_dst, dl_dst, ETH_ADDR_LEN);
+    memset(rule->wc.dl_dst_mask, 0xff, ETH_ADDR_LEN);
 }
 
 /* Modifies 'rule' so that the Ethernet address must match 'dl_dst' after each
@@ -171,12 +200,11 @@ cls_rule_set_dl_dst_masked(struct cls_rule *rule,
                            const uint8_t dl_dst[ETH_ADDR_LEN],
                            const uint8_t mask[ETH_ADDR_LEN])
 {
-    flow_wildcards_t *wc = &rule->wc.wildcards;
     size_t i;
 
-    *wc = flow_wildcards_set_dl_dst_mask(*wc, mask);
     for (i = 0; i < ETH_ADDR_LEN; i++) {
         rule->flow.dl_dst[i] = dl_dst[i] & mask[i];
+        rule->wc.dl_dst_mask[i] = mask[i];
     }
 }
 
@@ -415,8 +443,17 @@ cls_rule_set_ipv6_label(struct cls_rule *rule, ovs_be32 ipv6_label)
 void
 cls_rule_set_nd_target(struct cls_rule *rule, const struct in6_addr *target)
 {
-    rule->wc.wildcards &= ~FWW_ND_TARGET;
     rule->flow.nd_target = *target;
+    rule->wc.nd_target_mask = in6addr_exact;
+}
+
+void
+cls_rule_set_nd_target_masked(struct cls_rule *rule,
+                              const struct in6_addr *target,
+                              const struct in6_addr *mask)
+{
+    rule->flow.nd_target = ipv6_addr_bitand(target, mask);
+    rule->wc.nd_target_mask = *mask;
 }
 
 /* Returns true if 'a' and 'b' have the same priority, wildcard the same
@@ -437,6 +474,17 @@ cls_rule_hash(const struct cls_rule *rule, uint32_t basis)
     uint32_t h0 = flow_hash(&rule->flow, basis);
     uint32_t h1 = flow_wildcards_hash(&rule->wc, h0);
     return hash_int(rule->priority, h1);
+}
+
+static void
+format_eth_masked(struct ds *s, const char *name, const uint8_t eth[6],
+                  const uint8_t mask[6])
+{
+    if (!eth_addr_is_zero(mask)) {
+        ds_put_format(s, "%s=", name);
+        eth_format_masked(eth, mask, s);
+        ds_put_char(s, ',');
+    }
 }
 
 static void
@@ -491,7 +539,7 @@ cls_rule_format(const struct cls_rule *rule, struct ds *s)
 
     int i;
 
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 9);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 12);
 
     if (rule->priority != OFP_DEFAULT_PRIORITY) {
         ds_put_format(s, "priority=%d,", rule->priority);
@@ -561,6 +609,17 @@ cls_rule_format(const struct cls_rule *rule, struct ds *s)
                       ntohll(f->tun_id), ntohll(wc->tun_id_mask));
         break;
     }
+    switch (wc->metadata_mask) {
+    case 0:
+        break;
+    case CONSTANT_HTONLL(UINT64_MAX):
+        ds_put_format(s, "metadata=%#"PRIx64",", ntohll(f->metadata));
+        break;
+    default:
+        ds_put_format(s, "metadata=%#"PRIx64"/%#"PRIx64",",
+                      ntohll(f->metadata), ntohll(wc->metadata_mask));
+        break;
+    }
     if (!(w & FWW_IN_PORT)) {
         ds_put_format(s, "in_port=%"PRIu16",", f->in_port);
     }
@@ -588,24 +647,8 @@ cls_rule_format(const struct cls_rule *rule, struct ds *s)
                           ntohs(f->vlan_tci), ntohs(wc->vlan_tci_mask));
         }
     }
-    if (!(w & FWW_DL_SRC)) {
-        ds_put_format(s, "dl_src="ETH_ADDR_FMT",", ETH_ADDR_ARGS(f->dl_src));
-    }
-    switch (w & (FWW_DL_DST | FWW_ETH_MCAST)) {
-    case 0:
-        ds_put_format(s, "dl_dst="ETH_ADDR_FMT",", ETH_ADDR_ARGS(f->dl_dst));
-        break;
-    case FWW_DL_DST:
-        ds_put_format(s, "dl_dst="ETH_ADDR_FMT"/01:00:00:00:00:00,",
-                      ETH_ADDR_ARGS(f->dl_dst));
-        break;
-    case FWW_ETH_MCAST:
-        ds_put_format(s, "dl_dst="ETH_ADDR_FMT"/fe:ff:ff:ff:ff:ff,",
-                      ETH_ADDR_ARGS(f->dl_dst));
-        break;
-    case FWW_DL_DST | FWW_ETH_MCAST:
-        break;
-    }
+    format_eth_masked(s, "dl_src", f->dl_src, wc->dl_src_mask);
+    format_eth_masked(s, "dl_dst", f->dl_dst, wc->dl_dst_mask);
     if (!skip_type && !(w & FWW_DL_TYPE)) {
         ds_put_format(s, "dl_type=0x%04"PRIx16",", ntohs(f->dl_type));
     }
@@ -669,11 +712,8 @@ cls_rule_format(const struct cls_rule *rule, struct ds *s)
     } else if (f->nw_proto == IPPROTO_ICMPV6) {
         format_be16_masked(s, "icmp_type", f->tp_src, wc->tp_src_mask);
         format_be16_masked(s, "icmp_code", f->tp_dst, wc->tp_dst_mask);
-        if (!(w & FWW_ND_TARGET)) {
-            ds_put_cstr(s, "nd_target=");
-            print_ipv6_addr(s, &f->nd_target);
-            ds_put_char(s, ',');
-        }
+        format_ipv6_netmask(s, "nd_target", &f->nd_target,
+                            &wc->nd_target_mask);
         if (!(w & FWW_ARP_SHA)) {
             ds_put_format(s, "nd_sll="ETH_ADDR_FMT",",
                     ETH_ADDR_ARGS(f->arp_sha));
@@ -1036,6 +1076,7 @@ insert_table(struct classifier *cls, const struct flow_wildcards *wc)
     table = xzalloc(sizeof *table);
     hmap_init(&table->rules);
     table->wc = *wc;
+    table->is_catchall = flow_wildcards_is_catchall(&table->wc);
     hmap_insert(&cls->tables, &table->hmap_node, flow_wildcards_hash(wc, 0));
 
     return table;
@@ -1053,16 +1094,24 @@ static struct cls_rule *
 find_match(const struct cls_table *table, const struct flow *flow)
 {
     struct cls_rule *rule;
-    struct flow f;
 
-    f = *flow;
-    flow_zero_wildcards(&f, &table->wc);
-    HMAP_FOR_EACH_WITH_HASH (rule, hmap_node, flow_hash(&f, 0),
-                             &table->rules) {
-        if (flow_equal(&f, &rule->flow)) {
+    if (table->is_catchall) {
+        HMAP_FOR_EACH (rule, hmap_node, &table->rules) {
             return rule;
         }
+    } else {
+        struct flow f;
+
+        f = *flow;
+        flow_zero_wildcards(&f, &table->wc);
+        HMAP_FOR_EACH_WITH_HASH (rule, hmap_node, flow_hash(&f, 0),
+                                 &table->rules) {
+            if (flow_equal(&f, &rule->flow)) {
+                return rule;
+            }
+        }
     }
+
     return NULL;
 }
 
@@ -1164,7 +1213,7 @@ flow_equal_except(const struct flow *a, const struct flow *b,
     const flow_wildcards_t wc = wildcards->wildcards;
     int i;
 
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 9);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 12);
 
     for (i = 0; i < FLOW_N_REGS; i++) {
         if ((a->regs[i] ^ b->regs[i]) & wildcards->reg_masks[i]) {
@@ -1173,6 +1222,7 @@ flow_equal_except(const struct flow *a, const struct flow *b,
     }
 
     return (!((a->tun_id ^ b->tun_id) & wildcards->tun_id_mask)
+            && !((a->metadata ^ b->metadata) & wildcards->metadata_mask)
             && !((a->nw_src ^ b->nw_src) & wildcards->nw_src_mask)
             && !((a->nw_dst ^ b->nw_dst) & wildcards->nw_dst_mask)
             && (wc & FWW_IN_PORT || a->in_port == b->in_port)
@@ -1180,16 +1230,10 @@ flow_equal_except(const struct flow *a, const struct flow *b,
             && (wc & FWW_DL_TYPE || a->dl_type == b->dl_type)
             && !((a->tp_src ^ b->tp_src) & wildcards->tp_src_mask)
             && !((a->tp_dst ^ b->tp_dst) & wildcards->tp_dst_mask)
-            && (wc & FWW_DL_SRC || eth_addr_equals(a->dl_src, b->dl_src))
-            && (wc & FWW_DL_DST
-                || (!((a->dl_dst[0] ^ b->dl_dst[0]) & 0xfe)
-                    && a->dl_dst[1] == b->dl_dst[1]
-                    && a->dl_dst[2] == b->dl_dst[2]
-                    && a->dl_dst[3] == b->dl_dst[3]
-                    && a->dl_dst[4] == b->dl_dst[4]
-                    && a->dl_dst[5] == b->dl_dst[5]))
-            && (wc & FWW_ETH_MCAST
-                || !((a->dl_dst[0] ^ b->dl_dst[0]) & 0x01))
+            && eth_addr_equal_except(a->dl_src, b->dl_src,
+                                     wildcards->dl_src_mask)
+            && eth_addr_equal_except(a->dl_dst, b->dl_dst,
+                                     wildcards->dl_dst_mask)
             && (wc & FWW_NW_PROTO || a->nw_proto == b->nw_proto)
             && (wc & FWW_NW_TTL || a->nw_ttl == b->nw_ttl)
             && (wc & FWW_NW_DSCP || !((a->nw_tos ^ b->nw_tos) & IP_DSCP_MASK))
@@ -1202,6 +1246,6 @@ flow_equal_except(const struct flow *a, const struct flow *b,
                     &wildcards->ipv6_src_mask)
             && ipv6_equal_except(&a->ipv6_dst, &b->ipv6_dst,
                     &wildcards->ipv6_dst_mask)
-            && (wc & FWW_ND_TARGET
-                || ipv6_addr_equals(&a->nd_target, &b->nd_target)));
+            && ipv6_equal_except(&a->nd_target, &b->nd_target,
+                                 &wildcards->nd_target_mask));
 }

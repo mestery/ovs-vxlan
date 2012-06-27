@@ -1,5 +1,5 @@
 
-# Copyright (c) 2011 Nicira Networks
+# Copyright (c) 2011, 2012 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,10 +16,12 @@
 import datetime
 import logging
 import logging.handlers
+import re
 import socket
 import sys
 
 import ovs.dirs
+import ovs.unixctl
 import ovs.util
 
 FACILITIES = {"console": "info", "file": "info", "syslog": "info"}
@@ -41,6 +43,8 @@ class Vlog:
     __inited = False
     __msg_num = 0
     __mfl = {}  # Module -> facility -> level
+    __log_file = None
+    __file_handler = None
 
     def __init__(self, name):
         """Creates a new Vlog object representing a module called 'name'.  The
@@ -99,6 +103,7 @@ class Vlog:
 
         Vlog.__inited = True
         logging.raiseExceptions = False
+        Vlog.__log_file = log_file
         for f in FACILITIES:
             logger = logging.getLogger(f)
             logger.setLevel(logging.DEBUG)
@@ -110,10 +115,18 @@ class Vlog:
                     logger.addHandler(logging.handlers.SysLogHandler(
                         address="/dev/log",
                         facility=logging.handlers.SysLogHandler.LOG_DAEMON))
-                elif f == "file" and log_file:
-                    logger.addHandler(logging.FileHandler(log_file))
+                elif f == "file" and Vlog.__log_file:
+                    Vlog.__file_handler = logging.FileHandler(Vlog.__log_file)
+                    logger.addHandler(Vlog.__file_handler)
             except (IOError, socket.error):
                 logger.setLevel(logging.CRITICAL)
+
+        ovs.unixctl.command_register("vlog/reopen", "", 0, 0,
+                                     Vlog._unixctl_vlog_reopen, None)
+        ovs.unixctl.command_register("vlog/set", "spec", 1, sys.maxint,
+                                     Vlog._unixctl_vlog_set, None)
+        ovs.unixctl.command_register("vlog/list", "", 0, 0,
+                                     Vlog._unixctl_vlog_list, None)
 
     @staticmethod
     def set_level(module, facility, level):
@@ -149,6 +162,75 @@ class Vlog:
             for f in facilities:
                 Vlog.__mfl[m][f] = level
 
+    @staticmethod
+    def set_levels_from_string(s):
+        module = None
+        level = None
+        facility = None
+
+        for word in [w.lower() for w in re.split('[ :]', s)]:
+            if word == "any":
+                pass
+            elif word in FACILITIES:
+                if facility:
+                    return "cannot specify multiple facilities"
+                facility = word
+            elif word in LEVELS:
+                if level:
+                    return "cannot specify multiple levels"
+                level = word
+            elif word in Vlog.__mfl:
+                if module:
+                    return "cannot specify multiple modules"
+                module = word
+            else:
+                return "no facility, level, or module \"%s\"" % word
+
+        Vlog.set_level(module or "any", facility or "any", level or "any")
+
+    @staticmethod
+    def get_levels():
+        lines = ["                 console    syslog    file\n",
+                 "                 -------    ------    ------\n"]
+        lines.extend(sorted(["%-16s  %4s       %4s       %4s\n"
+                             % (m,
+                                Vlog.__mfl[m]["console"],
+                                Vlog.__mfl[m]["syslog"],
+                                Vlog.__mfl[m]["file"]) for m in Vlog.__mfl]))
+        return ''.join(lines)
+
+    @staticmethod
+    def reopen_log_file():
+        """Closes and then attempts to re-open the current log file.  (This is
+        useful just after log rotation, to ensure that the new log file starts
+        being used.)"""
+
+        if Vlog.__log_file:
+            logger = logging.getLogger("file")
+            logger.removeHandler(Vlog.__file_handler)
+            Vlog.__file_handler = logging.FileHandler(Vlog.__log_file)
+            logger.addHandler(Vlog.__file_handler)
+
+    @staticmethod
+    def _unixctl_vlog_reopen(conn, unused_argv, unused_aux):
+        if Vlog.__log_file:
+            Vlog.reopen_log_file()
+            conn.reply(None)
+        else:
+            conn.reply("Logging to file not configured")
+
+    @staticmethod
+    def _unixctl_vlog_set(conn, argv, unused_aux):
+        for arg in argv:
+            msg = Vlog.set_levels_from_string(arg)
+            if msg:
+                conn.reply(msg)
+                return
+        conn.reply(None)
+
+    @staticmethod
+    def _unixctl_vlog_list(conn, unused_argv, unused_aux):
+        conn.reply(Vlog.get_levels())
 
 def add_args(parser):
     """Adds vlog related options to 'parser', an ArgumentParser object.  The
@@ -160,7 +242,7 @@ def add_args(parser):
                        " is used if LOG_FILE is omitted.")
     group.add_argument("-v", "--verbose", nargs="*",
                        help="Sets logging levels, see ovs-vswitchd(8)."
-                       "  Defaults to ANY:ANY:dbg.")
+                       "  Defaults to dbg.")
 
 
 def handle_args(args):
@@ -178,23 +260,8 @@ def handle_args(args):
         args.verbose = ["any:any:dbg"]
 
     for verbose in args.verbose:
-        args = verbose.split(':')
-
-        if len(args) >= 3:
-            level = args[2]
-        else:
-            level = "dbg"
-
-        if len(args) >= 2:
-            facility = args[1]
-        else:
-            facility = "any"
-
-        if len(args) >= 1:
-            module = args[0]
-        else:
-            module = "any"
-
-        Vlog.set_level(module, facility, level)
+        msg = Vlog.set_levels_from_string(verbose)
+        if msg:
+            ovs.util.ovs_fatal(0, "processing \"%s\": %s" % (verbose, msg))
 
     Vlog.init(log_file)

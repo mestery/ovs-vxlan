@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2012 Nicira Networks.
+ * Copyright (c) 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,6 +32,7 @@ struct ds;
 enum mf_field_id {
     /* Metadata. */
     MFF_TUN_ID,                 /* be64 */
+    MFF_METADATA,               /* be64 */
     MFF_IN_PORT,                /* be16 */
 
 #if FLOW_N_REGS > 0
@@ -144,8 +145,6 @@ enum mf_prereqs {
 enum mf_maskable {
     MFM_NONE,                   /* No sub-field masking. */
     MFM_FULLY,                  /* Every bit is individually maskable. */
-    MFM_CIDR,                   /* Contiguous low-order bits may be masked. */
-    MFM_MCAST                   /* Byte 0, bit 0 is separately maskable. */
 };
 
 /* How to format or parse a field's value. */
@@ -190,12 +189,30 @@ struct mf_field {
     enum mf_prereqs prereqs;
     bool writable;              /* May be written by actions? */
 
-    /* NXM properties.
+    /* NXM and OXM properties.
      *
-     * A few "mf_field"s don't correspond to NXM fields.  Those have 0 and
-     * NULL for the following members, respectively. */
-    uint32_t nxm_header;        /* An NXM_* constant (a few fields have 0). */
-    const char *nxm_name;       /* The "NXM_*" constant's name. */
+     * There are the following possibilities for these members for a given
+     * mf_field:
+     *
+     *   - Neither NXM nor OXM defines such a field: these members will all be
+     *     zero or NULL.
+     *
+     *   - NXM and OXM both define such a field: nxm_header and oxm_header will
+     *     both be nonzero and different, similarly for nxm_name and oxm_name.
+     *
+     *   - Only NXM or only OXM defines such a field: nxm_header and oxm_header
+     *     will both have the same value (either an OXM_* or NXM_* value) and
+     *     similarly for nxm_name and oxm_name.
+     *
+     * Thus, 'nxm_header' is the appropriate header to use when outputting an
+     * NXM formatted match, since it will be an NXM_* constant when possible
+     * for compatibility with OpenFlow implementations that expect that, with
+     * OXM_* constants used for fields that OXM adds.  Conversely, 'oxm_header'
+     * is the header to use when outputting an OXM formatted match. */
+    uint32_t nxm_header;        /* An NXM_* (or OXM_*) constant. */
+    const char *nxm_name;       /* The nxm_header constant's name. */
+    uint32_t oxm_header;        /* An OXM_* (or NXM_*) constant. */
+    const char *oxm_name;	    /* The oxm_header constant's name */
 };
 
 /* The representation of a field's value. */
@@ -207,6 +224,7 @@ union mf_value {
     uint8_t mac[ETH_ADDR_LEN];
     struct in6_addr ipv6;
 };
+BUILD_ASSERT_DECL(sizeof(union mf_value) == 16);
 
 /* Part of a field. */
 struct mf_subfield {
@@ -214,6 +232,19 @@ struct mf_subfield {
     unsigned int ofs;           /* Bit offset. */
     unsigned int n_bits;        /* Number of bits. */
 };
+
+/* Data for some part of an mf_field.
+ *
+ * The data is stored "right-justified".  For example, if "union mf_subvalue
+ * value" contains NXM_OF_VLAN_TCI[0..11], then one could access the
+ * corresponding data in value.be16[7] as the bits in the mask htons(0xfff). */
+union mf_subvalue {
+    uint8_t u8[16];
+    ovs_be16 be16[8];
+    ovs_be32 be32[4];
+    ovs_be64 be64[2];
+};
+BUILD_ASSERT_DECL(sizeof(union mf_value) == sizeof (union mf_subvalue));
 
 /* Finding mf_fields. */
 const struct mf_field *mf_from_id(enum mf_field_id);
@@ -241,6 +272,7 @@ void mf_set_value(const struct mf_field *, const union mf_value *value,
                   struct cls_rule *);
 void mf_set_flow_value(const struct mf_field *, const union mf_value *value,
                        struct flow *);
+bool mf_is_zero(const struct mf_field *, const struct flow *);
 
 void mf_get(const struct mf_field *, const struct cls_rule *,
             union mf_value *value, union mf_value *mask);
@@ -253,11 +285,17 @@ void mf_set_wild(const struct mf_field *, struct cls_rule *);
 void mf_random_value(const struct mf_field *, union mf_value *value);
 
 /* Subfields. */
+void mf_write_subfield(const struct mf_subfield *, const union mf_subvalue *,
+                       struct cls_rule *);
 void mf_set_subfield(const struct mf_subfield *, uint64_t value,
                      struct cls_rule *);
 void mf_set_subfield_value(const struct mf_subfield *, uint64_t value,
                            struct flow *);
+
+void mf_read_subfield(const struct mf_subfield *, const struct flow *,
+                      union mf_subvalue *);
 uint64_t mf_get_subfield(const struct mf_subfield *, const struct flow *);
+
 
 void mf_format_subfield(const struct mf_subfield *, struct ds *);
 char *mf_parse_subfield__(struct mf_subfield *sf, const char **s);

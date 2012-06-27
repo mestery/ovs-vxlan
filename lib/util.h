@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -162,9 +162,10 @@ rightmost_1bit(uintmax_t x)
 extern "C" {
 #endif
 
-void set_program_name__(const char *name, const char *date, const char *time);
+void set_program_name__(const char *name, const char *version,
+                        const char *date, const char *time);
 #define set_program_name(name) \
-        set_program_name__(name, __DATE__, __TIME__)
+        set_program_name__(name, VERSION, __DATE__, __TIME__)
 
 const char *get_program_version(void);
 void ovs_print_version(uint8_t min_ofp, uint8_t max_ofp);
@@ -227,6 +228,10 @@ void bitwise_copy(const void *src, unsigned int src_len, unsigned int src_ofs,
                   unsigned int n_bits);
 void bitwise_zero(void *dst_, unsigned int dst_len, unsigned dst_ofs,
                   unsigned int n_bits);
+void bitwise_one(void *dst_, unsigned int dst_len, unsigned dst_ofs,
+                 unsigned int n_bits);
+bool bitwise_is_all_zeros(const void *, unsigned int len, unsigned int ofs,
+                          unsigned int n_bits);
 void bitwise_put(uint64_t value,
                  void *dst, unsigned int dst_len, unsigned int dst_ofs,
                  unsigned int n_bits);

@@ -1,4 +1,4 @@
-# Copyright (c) 2010, 2011, 2012 Nicira Networks
+# Copyright (c) 2010, 2011, 2012 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -371,6 +371,9 @@ class Session(object):
 
         if ovs.stream.PassiveStream.is_valid_name(name):
             reconnect.set_passive(True, ovs.timeval.msec())
+
+        if ovs.stream.stream_or_pstream_needs_probes(name):
+            reconnect.set_probe_interval(0)
 
         return Session(reconnect, None)
 

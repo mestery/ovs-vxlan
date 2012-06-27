@@ -1,5 +1,5 @@
 #! /bin/sh
-# Copyright (C) 2009, 2010, 2011, 2012 Nicira Networks, Inc.
+# Copyright (C) 2009, 2010, 2011, 2012 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -73,7 +73,7 @@ ovs_vsctl () {
 }
 
 ovsdb_tool () {
-    ovsdb-tool -vANY:console:off "$@"
+    ovsdb-tool -vconsole:off "$@"
 }
 
 create_db () {
@@ -182,13 +182,14 @@ start () {
 
 	# Start ovsdb-server.
 	set ovsdb-server "$DB_FILE"
-	set "$@" -vANY:CONSOLE:EMER -vANY:SYSLOG:ERR -vANY:FILE:INFO
+	set "$@" -vconsole:emer -vsyslog:err -vfile:info
 	set "$@" --remote=punix:"$DB_SOCK"
 	set "$@" --remote=db:Open_vSwitch,manager_options
 	set "$@" --private-key=db:SSL,private_key
 	set "$@" --certificate=db:SSL,certificate
 	set "$@" --bootstrap-ca-cert=db:SSL,ca_cert
-	start_daemon "$OVSDB_SERVER_PRIORITY" "$@" || return 1
+	start_daemon "$OVSDB_SERVER_PRIORITY" "$OVSDB_SERVER_WRAPPER" "$@" \
+            || return 1
 
 	# Initialize database settings.
 	ovs_vsctl -- init -- set Open_vSwitch . db-version="$schemaver" \
@@ -211,19 +212,19 @@ start () {
 
 	# Start ovs-vswitchd.
 	set ovs-vswitchd unix:"$DB_SOCK"
-	set "$@" -vANY:CONSOLE:EMER -vANY:SYSLOG:ERR -vANY:FILE:INFO
+	set "$@" -vconsole:emer -vsyslog:err -vfile:info
 	if test X"$MLOCKALL" != Xno; then
 	    set "$@" --mlockall
 	fi
-	start_daemon "$OVS_VSWITCHD_PRIORITY" "$@"
+	start_daemon "$OVS_VSWITCHD_PRIORITY" "$OVS_VSWITCHD_WRAPPER" "$@"
     fi
 
     if daemon_is_running ovs-brcompatd; then
 	log_success_msg "ovs-brcompatd is already running"
     elif test X"$BRCOMPAT" = Xyes; then
         set ovs-brcompatd
-	set "$@" -vANY:CONSOLE:EMER -vANY:SYSLOG:ERR -vANY:FILE:INFO
-	start_daemon "$OVS_BRCOMPATD_PRIORITY" "$@"
+	set "$@" -vconsole:emer -vsyslog:err -vfile:info
+	start_daemon "$OVS_BRCOMPATD_PRIORITY" "$OVS_BRCOMPATD_WRAPPER" "$@"
     fi
 }
 
@@ -311,6 +312,8 @@ force_reload_kmod () {
     log="logger -p daemon.$level -t ovs-save"
     $log "force-reload-kmod interface restore script exited with status $rc:"
     $log -f "$script"
+
+    "$datadir/scripts/ovs-check-dead-ifs"
 }
 
 ## --------------- ##
@@ -375,6 +378,9 @@ set_defaults () {
     OVSDB_SERVER_PRIORITY=-10
     OVS_VSWITCHD_PRIORITY=-10
     OVS_BRCOMPATD_PRIORITY=-10
+    OVSDB_SERVER_WRAPPER=
+    OVS_VSWITCHD_WRAPPER=
+    OVS_BRCOMPATD_WRAPPER=
 
     DB_FILE=$etcdir/conf.db
     DB_SOCK=$rundir/db.sock
@@ -439,6 +445,12 @@ Less important options for "start" and "force-reload-kmod":
   --ovsdb-server-priority=NICE   set ovsdb-server's niceness (default: $OVSDB_SERVER_PRIORITY)
   --ovs-vswitchd-priority=NICE   set ovs-vswitchd's niceness (default: $OVS_VSWITCHD_PRIORITY)
   --ovs-brcompatd-priority=NICE  set ovs-brcompatd's niceness (default: $OVS_BRCOMPATD_PRIORITY)
+
+Debugging options for "start" and "force-reload-kmod":
+  --ovsdb-server-wrapper=WRAPPER
+  --ovs-vswitchd-wrapper=WRAPPER
+  --ovs-vswitchd-wrapper=WRAPPER
+     run specified daemon under WRAPPER (either 'valgrind' or 'strace')
 
 Options for "start", "force-reload-kmod", "load-kmod", "status", and "version":
   --brcompat         enable Linux bridge compatibility module and daemon

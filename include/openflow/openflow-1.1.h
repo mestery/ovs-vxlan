@@ -32,7 +32,7 @@
  */
 
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -269,19 +269,19 @@ OFP_ASSERT(sizeof(struct ofp11_match) == OFPMT11_STANDARD_LENGTH);
 
 /* Flow wildcards. */
 enum ofp11_flow_wildcards {
-    OFPFW11_IN_PORT    = 1 << 0,  /* Switch input port. */
-    OFPFW11_DL_VLAN    = 1 << 1,  /* VLAN vid. */
-    OFPFW11_DL_SRC     = 1 << 2,  /* Ethernet source address. */
-    OFPFW11_DL_DST     = 1 << 3,  /* Ethernet destination address. */
-    OFPFW11_DL_TYPE    = 1 << 4,  /* Ethernet frame type. */
-    OFPFW11_NW_PROTO   = 1 << 5,  /* IP protocol. */
-    OFPFW11_TP_SRC     = 1 << 6,  /* TCP/UDP source port. */
-    OFPFW11_TP_DST     = 1 << 7,  /* TCP/UDP destination port. */
-    OFPFW11_MPLS_LABEL = 1 << 8,  /* MPLS label. */
-    OFPFW11_MPLS_TC    = 1 << 9,  /* MPLS TC. */
+    OFPFW11_IN_PORT     = 1 << 0,  /* Switch input port. */
+    OFPFW11_DL_VLAN     = 1 << 1,  /* VLAN id. */
+    OFPFW11_DL_VLAN_PCP = 1 << 2,  /* VLAN priority. */
+    OFPFW11_DL_TYPE     = 1 << 3,  /* Ethernet frame type. */
+    OFPFW11_NW_TOS      = 1 << 4,  /* IP ToS (DSCP field, 6 bits). */
+    OFPFW11_NW_PROTO    = 1 << 5,  /* IP protocol. */
+    OFPFW11_TP_SRC      = 1 << 6,  /* TCP/UDP/SCTP source port. */
+    OFPFW11_TP_DST      = 1 << 7,  /* TCP/UDP/SCTP destination port. */
+    OFPFW11_MPLS_LABEL  = 1 << 8,  /* MPLS label. */
+    OFPFW11_MPLS_TC     = 1 << 9,  /* MPLS TC. */
 
     /* Wildcard all fields. */
-    OFPFW11_ALL = ((1 << 10) - 1)
+    OFPFW11_ALL           = ((1 << 10) - 1)
 };
 
 /* The VLAN id is 12-bits, so we can use the entire 16 bits to indicate
@@ -471,7 +471,7 @@ struct ofp11_flow_mod {
                                     indicates no restriction. */
     ovs_be32 out_group;          /* For OFPFC_DELETE* commands, require
                                     matching entries to include this as an
-                                    output group. A value of OFPG_ANY
+                                    output group. A value of OFPG11_ANY
                                     indicates no restriction. */
     ovs_be16 flags;              /* One of OFPFF_*. */
     uint8_t pad[2];
@@ -487,6 +487,20 @@ enum ofp11_group_type {
     OFPGT11_SELECT,   /* Select group. */
     OFPGT11_INDIRECT, /* Indirect group. */
     OFPGT11_FF        /* Fast failover group. */
+};
+
+/* Group numbering. Groups can use any number up to OFPG_MAX. */
+enum ofp11_group {
+    /* Last usable group number. */
+    OFPG11_MAX        = 0xffffff00,
+
+    /* Fake groups. */
+    OFPG11_ALL        = 0xfffffffc,  /* Represents all groups for group delete
+                                        commands. */
+    OFPG11_ANY        = 0xffffffff   /* Wildcard group used only for flow stats
+                                        requests. Selects all flows regardless
+                                        of group (including flows with no
+                                        group). */
 };
 
 /* Bucket for use in groups. */
@@ -537,7 +551,7 @@ struct ofp11_flow_stats_request {
                                  as an output port. A value of OFPP_ANY
                                  indicates no restriction. */
     ovs_be32 out_group;       /* Require matching entries to include this
-                                 as an output group. A value of OFPG_ANY
+                                 as an output group. A value of OFPG11_ANY
                                  indicates no restriction. */
     uint8_t pad2[4];          /* Align to 64 bits. */
     ovs_be64 cookie;          /* Require matching entries to contain this

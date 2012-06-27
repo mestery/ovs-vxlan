@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,7 +34,7 @@ struct lswitch_config {
     enum lswitch_mode mode;
 
     /* 0 to use exact-match flow entries,
-     * a OFPFW_* bitmask to enable specific wildcards,
+     * a OFPFW10_* bitmask to enable specific wildcards,
      * or UINT32_MAX to use the default wildcards (wildcarding as many fields
      * as possible.
      *
@@ -55,8 +55,8 @@ struct lswitch_config {
      * specifying a particular queue. */
     uint32_t default_queue;
 
-    /* Maps from a port name to a queue_id (cast to void *). */
-    const struct shash *port_queues;
+    /* Maps from a port name to a queue_id. */
+    const struct simap *port_queues;
 };
 
 struct lswitch *lswitch_create(struct rconn *, const struct lswitch_config *);

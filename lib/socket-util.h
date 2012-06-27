@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -66,12 +66,7 @@ char *describe_fd(int fd);
 
 /* Default value of dscp bits for connection between controller and manager.
  * Value of IPTOS_PREC_INTERNETCONTROL = 0xc0 which is defined
- * in <netinet/ip.h> is used.  */
-#define DSCP_DEFAULT IPTOS_PREC_INTERNETCONTROL
-
-/* Invalid dscp value.  If the dscp value will not be used, the dscp value
- * passed must be invalid.  Set to 0xFF as the TOS bits passed can only be
- * 6 bits. */
-#define DSCP_INVALID 0xFF
+ * in <netinet/ip.h> is used. */
+#define DSCP_DEFAULT (IPTOS_PREC_INTERNETCONTROL >> 2)
 
 #endif /* socket-util.h */

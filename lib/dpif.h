@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -177,7 +177,8 @@ int dpif_execute(struct dpif *,
 
 enum dpif_op_type {
     DPIF_OP_FLOW_PUT = 1,
-    DPIF_OP_EXECUTE
+    DPIF_OP_FLOW_DEL,
+    DPIF_OP_EXECUTE,
 };
 
 struct dpif_flow_put {
@@ -187,6 +188,15 @@ struct dpif_flow_put {
     size_t key_len;                 /* Length of 'key' in bytes. */
     const struct nlattr *actions;   /* Actions to perform on flow. */
     size_t actions_len;             /* Length of 'actions' in bytes. */
+
+    /* Output. */
+    struct dpif_flow_stats *stats;  /* Optional flow statistics. */
+};
+
+struct dpif_flow_del {
+    /* Input. */
+    const struct nlattr *key;       /* Flow to delete. */
+    size_t key_len;                 /* Length of 'key' in bytes. */
 
     /* Output. */
     struct dpif_flow_stats *stats;  /* Optional flow statistics. */
@@ -205,6 +215,7 @@ struct dpif_op {
     int error;
     union {
         struct dpif_flow_put flow_put;
+        struct dpif_flow_del flow_del;
         struct dpif_execute execute;
     } u;
 };
@@ -240,7 +251,7 @@ struct dpif_upcall {
 };
 
 int dpif_recv_set(struct dpif *, bool enable);
-int dpif_recv(struct dpif *, struct dpif_upcall *);
+int dpif_recv(struct dpif *, struct dpif_upcall *, struct ofpbuf *);
 void dpif_recv_purge(struct dpif *);
 void dpif_recv_wait(struct dpif *);
 

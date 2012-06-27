@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,6 +37,7 @@
 #include "poll-loop.h"
 #include "rconn.h"
 #include "shash.h"
+#include "simap.h"
 #include "timeval.h"
 #include "vconn.h"
 #include "vlog.h"
@@ -110,27 +111,27 @@ lswitch_create(struct rconn *rconn, const struct lswitch_config *cfg)
             /* Try to wildcard as many fields as possible, but we cannot
              * wildcard all fields.  We need in_port to detect moves.  We need
              * Ethernet source and dest and VLAN VID to do L2 learning. */
-            ofpfw = (OFPFW_DL_TYPE | OFPFW_DL_VLAN_PCP
-                     | OFPFW_NW_SRC_ALL | OFPFW_NW_DST_ALL
-                     | OFPFW_NW_TOS | OFPFW_NW_PROTO
-                     | OFPFW_TP_SRC | OFPFW_TP_DST);
+            ofpfw = (OFPFW10_DL_TYPE | OFPFW10_DL_VLAN_PCP
+                     | OFPFW10_NW_SRC_ALL | OFPFW10_NW_DST_ALL
+                     | OFPFW10_NW_TOS | OFPFW10_NW_PROTO
+                     | OFPFW10_TP_SRC | OFPFW10_TP_DST);
         } else {
             ofpfw = cfg->wildcards;
         }
 
-        ofputil_wildcard_from_openflow(ofpfw, &sw->wc);
+        ofputil_wildcard_from_ofpfw10(ofpfw, &sw->wc);
     }
 
     sw->default_queue = cfg->default_queue;
     hmap_init(&sw->queue_numbers);
     shash_init(&sw->queue_names);
     if (cfg->port_queues) {
-        struct shash_node *node;
+        struct simap_node *node;
 
-        SHASH_FOR_EACH (node, cfg->port_queues) {
+        SIMAP_FOR_EACH (node, cfg->port_queues) {
             struct lswitch_port *port = xmalloc(sizeof *port);
             hmap_node_nullify(&port->hmap_node);
-            port->queue_id = (uintptr_t) node->data;
+            port->queue_id = node->data;
             shash_add(&sw->queue_names, node->name, port);
         }
     }
@@ -178,7 +179,6 @@ lswitch_create(struct rconn *rconn, const struct lswitch_config *cfg)
         if (error) {
             VLOG_INFO_RL(&rl, "%s: failed to queue default flows (%s)",
                          rconn_get_name(rconn), strerror(error));
-            ofpbuf_delete(msg);
         }
     }
 
@@ -279,12 +279,14 @@ lswitch_process_packet(struct lswitch *sw, struct rconn *rconn,
     case OFPUTIL_OFPST_TABLE_REQUEST:
     case OFPUTIL_OFPST_PORT_REQUEST:
     case OFPUTIL_OFPST_QUEUE_REQUEST:
+    case OFPUTIL_OFPST_PORT_DESC_REQUEST:
     case OFPUTIL_OFPST_DESC_REPLY:
     case OFPUTIL_OFPST_FLOW_REPLY:
     case OFPUTIL_OFPST_QUEUE_REPLY:
     case OFPUTIL_OFPST_PORT_REPLY:
     case OFPUTIL_OFPST_TABLE_REPLY:
     case OFPUTIL_OFPST_AGGREGATE_REPLY:
+    case OFPUTIL_OFPST_PORT_DESC_REPLY:
     case OFPUTIL_NXT_ROLE_REQUEST:
     case OFPUTIL_NXT_ROLE_REPLY:
     case OFPUTIL_NXT_FLOW_MOD_TABLE_ID:
@@ -364,7 +366,7 @@ process_switch_features(struct lswitch *sw, struct ofp_switch_features *osf)
 
     sw->datapath_id = features.datapath_id;
 
-    while (!ofputil_pull_switch_features_port(&b, &port)) {
+    while (!ofputil_pull_phy_port(osf->header.version, &b, &port)) {
         struct lswitch_port *lp = shash_find_data(&sw->queue_names, port.name);
         if (lp && hmap_node_is_null(&lp->hmap_node)) {
             lp->port_no = port.port_no;

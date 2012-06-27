@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -163,6 +163,17 @@ static struct dp_netdev *
 get_dp_netdev(const struct dpif *dpif)
 {
     return dpif_netdev_cast(dpif)->dp;
+}
+
+static int
+dpif_netdev_enumerate(struct sset *all_dps)
+{
+    struct shash_node *node;
+
+    SHASH_FOR_EACH(node, &dp_netdevs) {
+        sset_add(all_dps, node->name);
+    }
+    return 0;
 }
 
 static struct dpif *
@@ -777,24 +788,22 @@ dpif_netdev_flow_put(struct dpif *dpif, const struct dpif_flow_put *put)
 }
 
 static int
-dpif_netdev_flow_del(struct dpif *dpif,
-                     const struct nlattr *nl_key, size_t nl_key_len,
-                     struct dpif_flow_stats *stats)
+dpif_netdev_flow_del(struct dpif *dpif, const struct dpif_flow_del *del)
 {
     struct dp_netdev *dp = get_dp_netdev(dpif);
     struct dp_netdev_flow *flow;
     struct flow key;
     int error;
 
-    error = dpif_netdev_flow_from_nlattrs(nl_key, nl_key_len, &key);
+    error = dpif_netdev_flow_from_nlattrs(del->key, del->key_len, &key);
     if (error) {
         return error;
     }
 
     flow = dp_netdev_lookup_flow(dp, &key);
     if (flow) {
-        if (stats) {
-            get_dpif_flow_stats(flow, stats);
+        if (del->stats) {
+            get_dpif_flow_stats(flow, del->stats);
         }
         dp_netdev_free_flow(dp, flow);
         return 0;
@@ -937,13 +946,17 @@ find_nonempty_queue(struct dpif *dpif)
 }
 
 static int
-dpif_netdev_recv(struct dpif *dpif, struct dpif_upcall *upcall)
+dpif_netdev_recv(struct dpif *dpif, struct dpif_upcall *upcall,
+                 struct ofpbuf *buf)
 {
     struct dp_netdev_queue *q = find_nonempty_queue(dpif);
     if (q) {
         struct dpif_upcall *u = q->upcalls[q->tail++ & QUEUE_MASK];
         *upcall = *u;
         free(u);
+
+        ofpbuf_uninit(buf);
+        *buf = *upcall->packet;
 
         return 0;
     } else {
@@ -1240,7 +1253,7 @@ dp_netdev_execute_actions(struct dp_netdev *dp,
 
 const struct dpif_class dpif_netdev_class = {
     "netdev",
-    NULL,                       /* enumerate */
+    dpif_netdev_enumerate,
     dpif_netdev_open,
     dpif_netdev_close,
     dpif_netdev_destroy,

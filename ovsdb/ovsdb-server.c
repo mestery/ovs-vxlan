@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011 Nicira Networks
+/* Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,6 +32,7 @@
 #include "jsonrpc-server.h"
 #include "leak-checker.h"
 #include "list.h"
+#include "memory.h"
 #include "ovsdb.h"
 #include "ovsdb-data.h"
 #include "ovsdb-types.h"
@@ -39,6 +40,7 @@
 #include "poll-loop.h"
 #include "process.h"
 #include "row.h"
+#include "simap.h"
 #include "stream-ssl.h"
 #include "stream.h"
 #include "stress.h"
@@ -143,6 +145,17 @@ main(int argc, char *argv[])
 
     exiting = false;
     while (!exiting) {
+        memory_run();
+        if (memory_should_report()) {
+            struct simap usage;
+
+            simap_init(&usage);
+            ovsdb_jsonrpc_server_get_memory_usage(jsonrpc, &usage);
+            ovsdb_get_memory_usage(db, &usage);
+            memory_report(&usage);
+            simap_destroy(&usage);
+        }
+
         reconfigure_from_db(jsonrpc, db, &remotes);
         ovsdb_jsonrpc_server_run(jsonrpc);
         unixctl_server_run(unixctl);
@@ -157,6 +170,7 @@ main(int argc, char *argv[])
             update_remote_status(jsonrpc, &remotes, db);
         }
 
+        memory_wait();
         ovsdb_jsonrpc_server_wait(jsonrpc);
         unixctl_server_wait(unixctl);
         ovsdb_trigger_wait(db, time_msec());
@@ -276,7 +290,7 @@ add_remote(struct shash *remotes, const char *target)
 
     options = shash_find_data(remotes, target);
     if (!options) {
-        options = ovsdb_jsonrpc_default_options();
+        options = ovsdb_jsonrpc_default_options(target);
         shash_add(remotes, target, options);
     }
 
@@ -319,12 +333,11 @@ get_datum(struct ovsdb_row *row, const char *column_name,
     return &row->fields[column->index];
 }
 
-/* This function is used to read the string-string key-values from a map.
- * Returns the true if the 'key' is found and returns the "value"  associated
- * with the 'key' in 'stringp', else returns false. */
-static bool
+/* Read string-string key-values from a map.  Returns the value associated with
+ * 'key', if found, or NULL */
+static const char *
 read_map_string_column(const struct ovsdb_row *row, const char *column_name,
-                       const char **stringp, const char *key)
+                       const char *key)
 {
     const struct ovsdb_datum *datum;
     union ovsdb_atom *atom_key = NULL, *atom_value = NULL;
@@ -334,8 +347,7 @@ read_map_string_column(const struct ovsdb_row *row, const char *column_name,
                       OVSDB_TYPE_STRING, UINT_MAX);
 
     if (!datum) {
-        *stringp = NULL;
-        return false;
+        return NULL;
     }
 
     for (i = 0; i < datum->n; i++) {
@@ -346,8 +358,7 @@ read_map_string_column(const struct ovsdb_row *row, const char *column_name,
         }
     }
 
-    *stringp = atom_value ? atom_value->string : NULL;
-    return atom_value != NULL;
+    return atom_value ? atom_value->string : NULL;
 }
 
 static const union ovsdb_atom *
@@ -427,21 +438,6 @@ write_string_string_column(struct ovsdb_row *row, const char *column_name,
     ovsdb_datum_sort_assert(datum, column->type.key.type);
 }
 
-/* Get the other config for the manager from the database. */
-static void
-manager_get_other_config(const struct ovsdb_row *row,
-                         struct ovsdb_jsonrpc_options *options)
-{
-    const char *temp_string;
-
-    /* Retrieve the configs and store in the options. */
-    if (read_map_string_column(row, "other_config", &temp_string, "dscp")) {
-        options->dscp = atoi(temp_string);
-    } else {
-        options->dscp = DSCP_DEFAULT;
-    }
-}
-
 /* Adds a remote and options to 'remotes', based on the Manager table row in
  * 'row'. */
 static void
@@ -450,7 +446,7 @@ add_manager_options(struct shash *remotes, const struct ovsdb_row *row)
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
     struct ovsdb_jsonrpc_options *options;
     long long int max_backoff, probe_interval;
-    const char *target;
+    const char *target, *dscp_string;
 
     if (!read_string_column(row, "target", &target) || !target) {
         VLOG_INFO_RL(&rl, "Table `%s' has missing or invalid `target' column",
@@ -466,7 +462,14 @@ add_manager_options(struct shash *remotes, const struct ovsdb_row *row)
         options->probe_interval = probe_interval;
     }
 
-    manager_get_other_config(row, options);
+    options->dscp = DSCP_DEFAULT;
+    dscp_string = read_map_string_column(row, "other_config", "dscp");
+    if (dscp_string) {
+        int dscp = atoi(dscp_string);
+        if (dscp >= 0 && dscp <= 63) {
+            options->dscp = dscp;
+        }
+    }
 }
 
 static void

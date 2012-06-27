@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -152,12 +152,14 @@ fatal_signal_handler(int sig_nr)
 void
 fatal_signal_run(void)
 {
-    int sig_nr;
+    sig_atomic_t sig_nr;
 
     fatal_signal_init();
 
     sig_nr = stored_sig_nr;
     if (sig_nr != SIG_ATOMIC_MAX) {
+        VLOG_WARN("terminating with signal %d (%s)",
+                  (int)sig_nr, signal_name(sig_nr));
         call_hooks(sig_nr);
 
         /* Re-raise the signal with the default handling so that the program

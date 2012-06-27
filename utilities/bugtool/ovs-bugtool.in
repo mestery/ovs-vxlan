@@ -14,7 +14,7 @@
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 #
 # Copyright (c) 2005, 2007 XenSource Ltd.
-# Copyright (c) 2010, 2011 Nicira Networks.
+# Copyright (c) 2010, 2011 Nicira, Inc.
 
 #
 # To add new entries to the bugtool, you need to:
@@ -583,13 +583,14 @@ exclude those logs from the archive.
             f = open('/sys/class/net/%s/type' % p, 'r')
             t = f.readline()
             f.close()
-            if int(t) == 1:
+            if os.path.islink('/sys/class/net/%s/device' % p) and int(t) == 1:
                 # ARPHRD_ETHER
                 cmd_output(CAP_NETWORK_STATUS, [ETHTOOL, p])
                 cmd_output(CAP_NETWORK_STATUS, [ETHTOOL, '-S', p])
                 cmd_output(CAP_NETWORK_STATUS, [ETHTOOL, '-k', p])
                 cmd_output(CAP_NETWORK_STATUS, [ETHTOOL, '-i', p])
                 cmd_output(CAP_NETWORK_STATUS, [ETHTOOL, '-c', p])
+            if int(t) == 1:
                 cmd_output(CAP_NETWORK_STATUS,
                            [TC, '-s', '-d', 'class', 'show', 'dev', p])
         except:
@@ -1175,6 +1176,7 @@ class ProcOutput:
     def terminate(self):
         if self.running:
             try:
+                self.proc.stdout.close()
                 os.kill(self.proc.pid, SIGTERM)
             except:
                 pass
@@ -1187,6 +1189,7 @@ class ProcOutput:
         line = self.proc.stdout.readline()
         if line == '':
             # process exited
+            self.proc.stdout.close()
             self.status = self.proc.wait()
             self.proc = None
             self.running = False

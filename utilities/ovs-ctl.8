@@ -179,8 +179,34 @@ suppresses that behavior.
 .
 .IP "\fB\-\-ovsdb\-server\-priority=\fIniceness\fR"
 .IQ "\fB\-\-ovs\-vswitchd\-priority=\fIniceness\fR"
-Sets the \fBnice\fR(1) level used for \fBovsdb\-server\fR and
-\fBovs\-vswitchd\fR, respectively.  Both default to \fB\-10\fR.
+.IQ "\fB\-\-ovs\-brcompatd\-priority=\fIniceness\fR"
+Sets the \fBnice\fR(1) level used for each daemon.  All of them
+default to \fB\-10\fR.
+.
+.IP "\fB\-\-ovsdb\-server\-wrapper=\fIwrapper\fR"
+.IQ "\fB\-\-ovs\-vswitchd\-wrapper=\fIwrapper\fR"
+.IQ "\fB\-\-ovs\-brcompatd\-wrapper=\fIwrapper\fR"
+.
+Configures the specified daemon to run under \fIwrapper\fR, which is
+one of the following:
+.
+.RS
+.IP "\fBvalgrind\fR"
+Run the daemon under \fBvalgrind\fR(1), if it is installed, logging to
+\fIdaemon\fB.valgrind.log.\fIpid\fR in the log directory.
+.
+.IP "\fBstrace\fR"
+Run the daemon under \fBstrace\fR(1), if it is installed, logging to
+\fIdaemon\fB.strace.log.\fIpid\fR in the log directory.
+.RE
+.
+.IP
+By default, no wrapper is used.
+.
+.IP
+Wrappers greatly slow daemon operations so they should not be used in
+production.  They also produce voluminous logs that can quickly fill
+small disk partitions.
 .
 .PP
 The following options control file locations.  They should only be
@@ -261,11 +287,15 @@ reloads the kernel module and restarts the OVS daemons (including
 .IP 6.
 Restores the kernel configuration state that was saved in step 3.
 .
-.PP
-The steps above are often enough to hot-upgrade a new kernel module
-with only a few seconds of downtime.  DHCP is a common problem: if the
-ISC DHCP client is running on an OVS internal interface, then it will
-have to be restarted after completing the above procedure.
+.IP 7.
+Checks for daemons that may need to be restarted because they have
+packet sockets that are listening on old instances of Open vSwitch
+kernel interfaces and, if it finds any, prints a warning on stdout.
+DHCP is a common example: if the ISC DHCP client is running on an OVS
+internal interface, then it will have to be restarted after completing
+the above procedure.  (It would be nice if \fBovs\-ctl\fR could restart
+daemons automatically, but the details are far too specific to a
+particular distribution and installation.)
 .
 .PP
 \fBforce\-kmod\-reload\fR internally stops and starts OVS, so it

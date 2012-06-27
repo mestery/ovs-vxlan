@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -277,13 +277,19 @@ jsonrpc_send(struct jsonrpc *rpc, struct jsonrpc_msg *msg)
 int
 jsonrpc_recv(struct jsonrpc *rpc, struct jsonrpc_msg **msgp)
 {
+    int i;
+
     *msgp = NULL;
     if (rpc->status) {
         return rpc->status;
     }
 
-    while (!rpc->received) {
-        if (byteq_is_empty(&rpc->input)) {
+    for (i = 0; i < 50; i++) {
+        if (rpc->received) {
+            *msgp = rpc->received;
+            rpc->received = NULL;
+            return 0;
+        } else if (byteq_is_empty(&rpc->input)) {
             size_t chunk;
             int retval;
 
@@ -328,9 +334,7 @@ jsonrpc_recv(struct jsonrpc *rpc, struct jsonrpc_msg **msgp)
         }
     }
 
-    *msgp = rpc->received;
-    rpc->received = NULL;
-    return 0;
+    return EAGAIN;
 }
 
 /* Causes the poll loop to wake up when jsonrpc_recv() may return a value other
@@ -734,6 +738,7 @@ struct jsonrpc_session {
     struct stream *stream;
     struct pstream *pstream;
     unsigned int seqno;
+    uint8_t dscp;
 };
 
 /* Creates and returns a jsonrpc_session to 'name', which should be a string
@@ -759,9 +764,14 @@ jsonrpc_session_open(const char *name)
     s->stream = NULL;
     s->pstream = NULL;
     s->seqno = 0;
+    s->dscp = 0;
 
     if (!pstream_verify_name(name)) {
         reconnect_set_passive(s->reconnect, true, time_msec());
+    }
+
+    if (!stream_or_pstream_needs_probes(name)) {
+        reconnect_set_probe_interval(s->reconnect, 0);
     }
 
     return s;
@@ -783,6 +793,7 @@ jsonrpc_session_open_unreliably(struct jsonrpc *jsonrpc)
     reconnect_set_name(s->reconnect, jsonrpc_get_name(jsonrpc));
     reconnect_set_max_tries(s->reconnect, 0);
     reconnect_connected(s->reconnect, time_msec());
+    s->dscp = 0;
     s->rpc = jsonrpc;
     s->stream = NULL;
     s->pstream = NULL;
@@ -826,14 +837,13 @@ jsonrpc_session_connect(struct jsonrpc_session *s)
 
     jsonrpc_session_disconnect(s);
     if (!reconnect_is_passive(s->reconnect)) {
-        error = jsonrpc_stream_open(name, &s->stream,
-                                    reconnect_get_dscp(s->reconnect));
+        error = jsonrpc_stream_open(name, &s->stream, s->dscp);
         if (!error) {
             reconnect_connecting(s->reconnect, time_msec());
         }
     } else {
         error = s->pstream ? 0 : jsonrpc_pstream_open(name, &s->pstream,
-                                        reconnect_get_dscp(s->reconnect));
+                                                      s->dscp);
         if (!error) {
             reconnect_listening(s->reconnect, time_msec());
         }
@@ -1049,5 +1059,8 @@ void
 jsonrpc_session_set_dscp(struct jsonrpc_session *s,
                          uint8_t dscp)
 {
-    reconnect_set_dscp(s->reconnect, dscp);
+    if (s->dscp != dscp) {
+        s->dscp = dscp;
+        jsonrpc_session_force_reconnect(s);
+    }
 }

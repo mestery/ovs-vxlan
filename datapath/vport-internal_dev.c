@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2012 Nicira Networks.
+ * Copyright (c) 2007-2012 Nicira, Inc.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of version 2 of the GNU General Public
@@ -24,6 +24,9 @@
 #include <linux/ethtool.h>
 #include <linux/skbuff.h>
 #include <linux/version.h>
+
+#include <net/dst.h>
+#include <net/xfrm.h>
 
 #include "checksum.h"
 #include "datapath.h"
@@ -289,6 +292,11 @@ static int internal_dev_recv(struct vport *vport, struct sk_buff *skb)
 #endif
 
 	len = skb->len;
+
+	skb_dst_drop(skb);
+	nf_reset(skb);
+	secpath_reset(skb);
+
 	skb->dev = netdev;
 	skb->pkt_type = PACKET_HOST;
 	skb->protocol = eth_type_trans(skb, netdev);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  * Copyright (c) 2010 Jean Tourrilhes - HP-Labs.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -45,6 +45,7 @@
 #include "poll-loop.h"
 #include "random.h"
 #include "shash.h"
+#include "simap.h"
 #include "sset.h"
 #include "timeval.h"
 #include "unaligned.h"
@@ -116,7 +117,6 @@ struct ofoperation {
     struct hmap_node hmap_node; /* In ofproto's "deletions" hmap. */
     struct rule *rule;          /* Rule being operated upon. */
     enum ofoperation_type type; /* Type of operation. */
-    int status;                 /* -1 if pending, otherwise 0 or error code. */
     struct rule *victim;        /* OFOPERATION_ADDING: Replaced rule. */
     union ofp_action *actions;  /* OFOPERATION_MODIFYING: Replaced actions. */
     int n_actions;              /* OFOPERATION_MODIFYING: # of old actions. */
@@ -385,6 +385,10 @@ ofproto_create(const char *datapath_name, const char *datapath_type,
     list_init(&ofproto->pending);
     ofproto->n_pending = 0;
     hmap_init(&ofproto->deletions);
+    ofproto->n_add = ofproto->n_delete = ofproto->n_modify = 0;
+    ofproto->first_op = ofproto->last_op = LLONG_MIN;
+    ofproto->next_op_report = LLONG_MAX;
+    ofproto->op_backoff = LLONG_MIN;
     ofproto->vlan_bitmap = NULL;
     ofproto->vlans_changed = false;
     ofproto->min_mtu = INT_MAX;
@@ -664,8 +668,8 @@ ofproto_port_get_stp_status(struct ofproto *ofproto, uint16_t ofp_port,
 {
     struct ofport *ofport = ofproto_get_port(ofproto, ofp_port);
     if (!ofport) {
-        VLOG_WARN("%s: cannot get STP status on nonexistent port %"PRIu16,
-                  ofproto->name, ofp_port);
+        VLOG_WARN_RL(&rl, "%s: cannot get STP status on nonexistent "
+                     "port %"PRIu16, ofproto->name, ofp_port);
         return ENODEV;
     }
 
@@ -1027,8 +1031,9 @@ process_port_change(struct ofproto *ofproto, int error, char *devname)
 int
 ofproto_run(struct ofproto *p)
 {
+    struct sset changed_netdevs;
+    const char *changed_netdev;
     struct ofport *ofport;
-    char *devname;
     int error;
 
     error = p->ofproto_class->run(p);
@@ -1037,18 +1042,31 @@ ofproto_run(struct ofproto *p)
     }
 
     if (p->ofproto_class->port_poll) {
+        char *devname;
+
         while ((error = p->ofproto_class->port_poll(p, &devname)) != EAGAIN) {
             process_port_change(p, error, devname);
         }
     }
 
+    /* Update OpenFlow port status for any port whose netdev has changed.
+     *
+     * Refreshing a given 'ofport' can cause an arbitrary ofport to be
+     * destroyed, so it's not safe to update ports directly from the
+     * HMAP_FOR_EACH loop, or even to use HMAP_FOR_EACH_SAFE.  Instead, we
+     * need this two-phase approach. */
+    sset_init(&changed_netdevs);
     HMAP_FOR_EACH (ofport, hmap_node, &p->ports) {
         unsigned int change_seq = netdev_change_seq(ofport->netdev);
         if (ofport->change_seq != change_seq) {
             ofport->change_seq = change_seq;
-            update_port(p, netdev_get_name(ofport->netdev));
+            sset_add(&changed_netdevs, netdev_get_name(ofport->netdev));
         }
     }
+    SSET_FOR_EACH (changed_netdev, &changed_netdevs) {
+        update_port(p, changed_netdev);
+    }
+    sset_destroy(&changed_netdevs);
 
     switch (p->state) {
     case S_OPENFLOW:
@@ -1074,6 +1092,43 @@ ofproto_run(struct ofproto *p)
 
     default:
         NOT_REACHED();
+    }
+
+    if (time_msec() >= p->next_op_report) {
+        long long int ago = (time_msec() - p->first_op) / 1000;
+        long long int interval = (p->last_op - p->first_op) / 1000;
+        struct ds s;
+
+        ds_init(&s);
+        ds_put_format(&s, "%d flow_mods ",
+                      p->n_add + p->n_delete + p->n_modify);
+        if (interval == ago) {
+            ds_put_format(&s, "in the last %lld s", ago);
+        } else if (interval) {
+            ds_put_format(&s, "in the %lld s starting %lld s ago",
+                          interval, ago);
+        } else {
+            ds_put_format(&s, "%lld s ago", ago);
+        }
+
+        ds_put_cstr(&s, " (");
+        if (p->n_add) {
+            ds_put_format(&s, "%d adds, ", p->n_add);
+        }
+        if (p->n_delete) {
+            ds_put_format(&s, "%d deletes, ", p->n_delete);
+        }
+        if (p->n_modify) {
+            ds_put_format(&s, "%d modifications, ", p->n_modify);
+        }
+        s.length -= 2;
+        ds_put_char(&s, ')');
+
+        VLOG_INFO("%s", ds_cstr(&s));
+        ds_destroy(&s);
+
+        p->n_add = p->n_delete = p->n_modify = 0;
+        p->next_op_report = LLONG_MAX;
     }
 
     return error;
@@ -1133,6 +1188,31 @@ bool
 ofproto_is_alive(const struct ofproto *p)
 {
     return connmgr_has_controllers(p->connmgr);
+}
+
+/* Adds some memory usage statistics for 'ofproto' into 'usage', for use with
+ * memory_report(). */
+void
+ofproto_get_memory_usage(const struct ofproto *ofproto, struct simap *usage)
+{
+    const struct oftable *table;
+    unsigned int n_rules;
+
+    simap_increase(usage, "ports", hmap_count(&ofproto->ports));
+    simap_increase(usage, "ops",
+                   ofproto->n_pending + hmap_count(&ofproto->deletions));
+
+    n_rules = 0;
+    OFPROTO_FOR_EACH_TABLE (table, ofproto) {
+        n_rules += classifier_count(&table->cls);
+    }
+    simap_increase(usage, "rules", n_rules);
+
+    if (ofproto->ofproto_class->get_memory_usage) {
+        ofproto->ofproto_class->get_memory_usage(ofproto, usage);
+    }
+
+    connmgr_get_memory_usage(ofproto->connmgr, usage);
 }
 
 void
@@ -2098,7 +2178,7 @@ handle_table_stats_request(struct ofconn *ofconn,
     for (i = 0; i < p->n_tables; i++) {
         ots[i].table_id = i;
         sprintf(ots[i].name, "table%zu", i);
-        ots[i].wildcards = htonl(OFPFW_ALL);
+        ots[i].wildcards = htonl(OFPFW10_ALL);
         ots[i].max_entries = htonl(1000000); /* An arbitrary big number. */
         ots[i].active_count = htonl(classifier_count(&p->tables[i].cls));
     }
@@ -2167,6 +2247,25 @@ handle_port_stats_request(struct ofconn *ofconn,
         HMAP_FOR_EACH (port, hmap_node, &p->ports) {
             append_port_stat(port, &replies);
         }
+    }
+
+    ofconn_send_replies(ofconn, &replies);
+    return 0;
+}
+
+static enum ofperr
+handle_port_desc_stats_request(struct ofconn *ofconn,
+                               const struct ofp_stats_msg *osm)
+{
+    struct ofproto *p = ofconn_get_ofproto(ofconn);
+    struct ofport *port;
+    struct list replies;
+
+    ofputil_start_stats_reply(osm, &replies);
+
+    HMAP_FOR_EACH (port, hmap_node, &p->ports) {
+        ofputil_append_port_desc_stats_reply(ofconn_get_protocol(ofconn),
+                                             &port->pp, &replies);
     }
 
     ofconn_send_replies(ofconn, &replies);
@@ -2726,7 +2825,7 @@ add_flow(struct ofproto *ofproto, struct ofconn *ofconn,
     rule->ofproto = ofproto;
     rule->cr = fm->cr;
     rule->pending = NULL;
-    rule->flow_cookie = fm->cookie;
+    rule->flow_cookie = fm->new_cookie;
     rule->created = rule->modified = rule->used = time_msec();
     rule->idle_timeout = fm->idle_timeout;
     rule->hard_timeout = fm->hard_timeout;
@@ -2826,7 +2925,9 @@ modify_flows__(struct ofproto *ofproto, struct ofconn *ofconn,
         } else {
             rule->modified = time_msec();
         }
-        rule->flow_cookie = fm->cookie;
+        if (fm->new_cookie != htonll(UINT64_MAX)) {
+            rule->flow_cookie = fm->new_cookie;
+        }
     }
     ofopgroup_submit(group);
 
@@ -2849,9 +2950,13 @@ modify_flows_loose(struct ofproto *ofproto, struct ofconn *ofconn,
     error = collect_rules_loose(ofproto, fm->table_id, &fm->cr,
                                 fm->cookie, fm->cookie_mask,
                                 OFPP_NONE, &rules);
-    return (error ? error
-            : list_is_empty(&rules) ? add_flow(ofproto, ofconn, fm, request)
-            : modify_flows__(ofproto, ofconn, fm, request, &rules));
+    if (error) {
+        return error;
+    } else if (list_is_empty(&rules)) {
+        return fm->cookie_mask ? 0 : add_flow(ofproto, ofconn, fm, request);
+    } else {
+        return modify_flows__(ofproto, ofconn, fm, request, &rules);
+    }
 }
 
 /* Implements OFPFC_MODIFY_STRICT.  Returns 0 on success or an OpenFlow error
@@ -2870,11 +2975,16 @@ modify_flow_strict(struct ofproto *ofproto, struct ofconn *ofconn,
     error = collect_rules_strict(ofproto, fm->table_id, &fm->cr,
                                  fm->cookie, fm->cookie_mask,
                                  OFPP_NONE, &rules);
-    return (error ? error
-            : list_is_empty(&rules) ? add_flow(ofproto, ofconn, fm, request)
-            : list_is_singleton(&rules) ? modify_flows__(ofproto, ofconn,
-                                                         fm, request, &rules)
-            : 0);
+
+    if (error) {
+        return error;
+    } else if (list_is_empty(&rules)) {
+        return fm->cookie_mask ? 0 : add_flow(ofproto, ofconn, fm, request);
+    } else {
+        return list_is_singleton(&rules) ? modify_flows__(ofproto, ofconn,
+                                                          fm, request, &rules)
+                                         : 0;
+    }
 }
 
 /* OFPFC_DELETE implementation. */
@@ -3007,8 +3117,10 @@ ofproto_rule_expire(struct rule *rule, uint8_t reason)
 static enum ofperr
 handle_flow_mod(struct ofconn *ofconn, const struct ofp_header *oh)
 {
+    struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
     struct ofputil_flow_mod fm;
     enum ofperr error;
+    long long int now;
 
     error = reject_slave_controller(ofconn);
     if (error) {
@@ -3020,15 +3132,46 @@ handle_flow_mod(struct ofconn *ofconn, const struct ofp_header *oh)
         return error;
     }
 
-    /* We do not support the emergency flow cache.  It will hopefully get
-     * dropped from OpenFlow in the near future. */
+    /* We do not support the OpenFlow 1.0 emergency flow cache, which is not
+     * required in OpenFlow 1.0.1 and removed from OpenFlow 1.1. */
     if (fm.flags & OFPFF_EMERG) {
         /* There isn't a good fit for an error code, so just state that the
          * flow table is full. */
         return OFPERR_OFPFMFC_ALL_TABLES_FULL;
     }
 
-    return handle_flow_mod__(ofconn_get_ofproto(ofconn), ofconn, &fm, oh);
+    error = handle_flow_mod__(ofconn_get_ofproto(ofconn), ofconn, &fm, oh);
+    if (error) {
+        return error;
+    }
+
+    /* Record the operation for logging a summary report. */
+    switch (fm.command) {
+    case OFPFC_ADD:
+        ofproto->n_add++;
+        break;
+
+    case OFPFC_MODIFY:
+    case OFPFC_MODIFY_STRICT:
+        ofproto->n_modify++;
+        break;
+
+    case OFPFC_DELETE:
+    case OFPFC_DELETE_STRICT:
+        ofproto->n_delete++;
+        break;
+    }
+
+    now = time_msec();
+    if (ofproto->next_op_report == LLONG_MAX) {
+        ofproto->first_op = now;
+        ofproto->next_op_report = MAX(now + 10 * 1000,
+                                      ofproto->op_backoff);
+        ofproto->op_backoff = ofproto->next_op_report + 60 * 1000;
+    }
+    ofproto->last_op = now;
+
+    return 0;
 }
 
 static enum ofperr
@@ -3172,6 +3315,10 @@ handle_nxt_set_async_config(struct ofconn *ofconn, const struct ofp_header *oh)
     slave[OAM_FLOW_REMOVED] = ntohl(msg->flow_removed_mask[1]);
 
     ofconn_set_async_config(ofconn, master, slave);
+    if (ofconn_get_type(ofconn) == OFCONN_SERVICE &&
+        !ofconn_get_miss_send_len(ofconn)) {
+        ofconn_set_miss_send_len(ofconn, OFP_DEFAULT_MISS_SEND_LEN);
+    }
 
     return 0;
 }
@@ -3194,14 +3341,13 @@ handle_nxt_set_controller_id(struct ofconn *ofconn,
 static enum ofperr
 handle_barrier_request(struct ofconn *ofconn, const struct ofp_header *oh)
 {
-    struct ofp_header *ob;
     struct ofpbuf *buf;
 
     if (ofconn_has_pending_opgroups(ofconn)) {
         return OFPROTO_POSTPONE;
     }
 
-    ob = make_openflow_xid(sizeof *ob, OFPT10_BARRIER_REPLY, oh->xid, &buf);
+    make_openflow_xid(sizeof *oh, OFPT10_BARRIER_REPLY, oh->xid, &buf);
     ofconn_send_reply(ofconn, buf);
     return 0;
 }
@@ -3295,6 +3441,9 @@ handle_openflow__(struct ofconn *ofconn, const struct ofpbuf *msg)
     case OFPUTIL_OFPST_QUEUE_REQUEST:
         return handle_queue_stats_request(ofconn, msg->data);
 
+    case OFPUTIL_OFPST_PORT_DESC_REQUEST:
+        return handle_port_desc_stats_request(ofconn, msg->data);
+
     case OFPUTIL_MSG_INVALID:
     case OFPUTIL_OFPT_HELLO:
     case OFPUTIL_OFPT_ERROR:
@@ -3312,6 +3461,7 @@ handle_openflow__(struct ofconn *ofconn, const struct ofpbuf *msg)
     case OFPUTIL_OFPST_PORT_REPLY:
     case OFPUTIL_OFPST_TABLE_REPLY:
     case OFPUTIL_OFPST_AGGREGATE_REPLY:
+    case OFPUTIL_OFPST_PORT_DESC_REPLY:
     case OFPUTIL_NXT_ROLE_REPLY:
     case OFPUTIL_NXT_FLOW_REMOVED:
     case OFPUTIL_NXT_PACKET_IN:
@@ -3427,6 +3577,7 @@ static void
 ofoperation_create(struct ofopgroup *group, struct rule *rule,
                    enum ofoperation_type type)
 {
+    struct ofproto *ofproto = group->ofproto;
     struct ofoperation *op;
 
     assert(!rule->pending);
@@ -3436,11 +3587,10 @@ ofoperation_create(struct ofopgroup *group, struct rule *rule,
     list_push_back(&group->ops, &op->group_node);
     op->rule = rule;
     op->type = type;
-    op->status = -1;
     op->flow_cookie = rule->flow_cookie;
 
     if (type == OFOPERATION_DELETE) {
-        hmap_insert(&op->group->ofproto->deletions, &op->hmap_node,
+        hmap_insert(&ofproto->deletions, &op->hmap_node,
                     cls_rule_hash(&rule->cr, rule->table_id));
     }
 }
@@ -3502,7 +3652,6 @@ ofoperation_complete(struct ofoperation *op, enum ofperr error)
     struct ofproto *ofproto = rule->ofproto;
 
     assert(rule->pending == op);
-    assert(op->status < 0);
 
     if (!error
         && !group->error
@@ -3544,6 +3693,7 @@ ofoperation_complete(struct ofoperation *op, enum ofperr error)
         } else {
             oftable_substitute_rule(rule, op->victim);
             ofproto_rule_destroy__(rule);
+            op->rule = NULL;
         }
         break;
 
@@ -3860,6 +4010,7 @@ oftable_init(struct oftable *table)
 {
     memset(table, 0, sizeof *table);
     classifier_init(&table->cls);
+    table->max_flows = UINT_MAX;
 }
 
 /* Destroys 'table', including its classifier and eviction groups.

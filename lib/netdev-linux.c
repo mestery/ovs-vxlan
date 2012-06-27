@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -77,7 +77,8 @@ COVERAGE_DEFINE(netdev_arp_lookup);
 COVERAGE_DEFINE(netdev_get_ifindex);
 COVERAGE_DEFINE(netdev_get_hwaddr);
 COVERAGE_DEFINE(netdev_set_hwaddr);
-COVERAGE_DEFINE(netdev_ethtool);
+COVERAGE_DEFINE(netdev_get_ethtool);
+COVERAGE_DEFINE(netdev_set_ethtool);
 
 
 /* These were introduced in Linux 2.6.14, so they might be missing if we have
@@ -181,7 +182,7 @@ struct tc_ops {
      *
      * (This function is null for tc_ops_other, which cannot be installed.  For
      * other TC classes it should always be nonnull.) */
-    int (*tc_install)(struct netdev *netdev, const struct shash *details);
+    int (*tc_install)(struct netdev *netdev, const struct smap *details);
 
     /* Called when the netdev code determines (through a Netlink query) that
      * this TC class's qdisc is installed on 'netdev', but we didn't install
@@ -221,7 +222,7 @@ struct tc_ops {
      *
      * This function may be null if 'tc' is not configurable.
      */
-    int (*qdisc_get)(const struct netdev *netdev, struct shash *details);
+    int (*qdisc_get)(const struct netdev *netdev, struct smap *details);
 
     /* Reconfigures 'netdev->tc' according to 'details', performing any
      * required Netlink calls to complete the reconfiguration.
@@ -232,7 +233,7 @@ struct tc_ops {
      *
      * This function may be null if 'tc' is not configurable.
      */
-    int (*qdisc_set)(struct netdev *, const struct shash *details);
+    int (*qdisc_set)(struct netdev *, const struct smap *details);
 
     /* Retrieves details of 'queue' on 'netdev->tc' into 'details'.  'queue' is
      * one of the 'struct tc_queue's within 'netdev->tc->queues'.
@@ -248,7 +249,7 @@ struct tc_ops {
      * This function may be null if 'tc' does not have queues ('n_queues' is
      * 0). */
     int (*class_get)(const struct netdev *netdev, const struct tc_queue *queue,
-                     struct shash *details);
+                     struct smap *details);
 
     /* Configures or reconfigures 'queue_id' on 'netdev->tc' according to
      * 'details', perfoming any required Netlink calls to complete the
@@ -262,7 +263,7 @@ struct tc_ops {
      * This function may be null if 'tc' does not have queues or its queues are
      * not configurable. */
     int (*class_set)(struct netdev *, unsigned int queue_id,
-                     const struct shash *details);
+                     const struct smap *details);
 
     /* Deletes 'queue' from 'netdev->tc'.  'queue' is one of the 'struct
      * tc_queue's within 'netdev->tc->queues'.
@@ -506,6 +507,7 @@ netdev_linux_get_drvinfo(struct netdev_dev_linux *netdev_dev)
         return 0;
     }
 
+    COVERAGE_INC(netdev_get_ethtool);
     memset(&netdev_dev->drvinfo, 0, sizeof netdev_dev->drvinfo);
     error = netdev_linux_do_ethtool(netdev_dev->netdev_dev.name,
                                     (struct ethtool_cmd *)&netdev_dev->drvinfo,
@@ -1203,6 +1205,7 @@ netdev_linux_get_miimon(const char *name, bool *miimon)
         VLOG_DBG_RL(&rl, "%s: failed to query MII, falling back to ethtool",
                     name);
 
+        COVERAGE_INC(netdev_get_ethtool);
         memset(&ecmd, 0, sizeof ecmd);
         error = netdev_linux_do_ethtool(name, &ecmd, ETHTOOL_GLINK,
                                         "ETHTOOL_GLINK");
@@ -1496,6 +1499,7 @@ netdev_linux_read_features(struct netdev_dev_linux *netdev_dev)
         return;
     }
 
+    COVERAGE_INC(netdev_get_ethtool);
     memset(&ecmd, 0, sizeof ecmd);
     error = netdev_linux_do_ethtool(netdev_dev->netdev_dev.name, &ecmd,
                                     ETHTOOL_GSET, "ETHTOOL_GSET");
@@ -1652,6 +1656,7 @@ netdev_linux_set_advertisements(struct netdev *netdev,
     struct ethtool_cmd ecmd;
     int error;
 
+    COVERAGE_INC(netdev_get_ethtool);
     memset(&ecmd, 0, sizeof ecmd);
     error = netdev_linux_do_ethtool(netdev_get_name(netdev), &ecmd,
                                     ETHTOOL_GSET, "ETHTOOL_GSET");
@@ -1696,6 +1701,7 @@ netdev_linux_set_advertisements(struct netdev *netdev,
     if (advertise & NETDEV_F_PAUSE_ASYM) {
         ecmd.advertising |= ADVERTISED_Asym_Pause;
     }
+    COVERAGE_INC(netdev_set_ethtool);
     return netdev_linux_do_ethtool(netdev_get_name(netdev), &ecmd,
                                    ETHTOOL_SSET, "ETHTOOL_SSET");
 }
@@ -1845,7 +1851,7 @@ netdev_linux_get_qos_capabilities(const struct netdev *netdev OVS_UNUSED,
 
 static int
 netdev_linux_get_qos(const struct netdev *netdev,
-                     const char **typep, struct shash *details)
+                     const char **typep, struct smap *details)
 {
     struct netdev_dev_linux *netdev_dev =
                                 netdev_dev_linux_cast(netdev_get_dev(netdev));
@@ -1864,7 +1870,7 @@ netdev_linux_get_qos(const struct netdev *netdev,
 
 static int
 netdev_linux_set_qos(struct netdev *netdev,
-                     const char *type, const struct shash *details)
+                     const char *type, const struct smap *details)
 {
     struct netdev_dev_linux *netdev_dev =
                                 netdev_dev_linux_cast(netdev_get_dev(netdev));
@@ -1901,7 +1907,7 @@ netdev_linux_set_qos(struct netdev *netdev,
 
 static int
 netdev_linux_get_queue(const struct netdev *netdev,
-                       unsigned int queue_id, struct shash *details)
+                       unsigned int queue_id, struct smap *details)
 {
     struct netdev_dev_linux *netdev_dev =
                                 netdev_dev_linux_cast(netdev_get_dev(netdev));
@@ -1920,7 +1926,7 @@ netdev_linux_get_queue(const struct netdev *netdev,
 
 static int
 netdev_linux_set_queue(struct netdev *netdev,
-                       unsigned int queue_id, const struct shash *details)
+                       unsigned int queue_id, const struct smap *details)
 {
     struct netdev_dev_linux *netdev_dev =
                                 netdev_dev_linux_cast(netdev_get_dev(netdev));
@@ -2002,7 +2008,7 @@ netdev_linux_dump_queues(const struct netdev *netdev,
     struct netdev_dev_linux *netdev_dev =
                                 netdev_dev_linux_cast(netdev_get_dev(netdev));
     struct tc_queue *queue, *next_queue;
-    struct shash details;
+    struct smap details;
     int last_error;
     int error;
 
@@ -2014,10 +2020,10 @@ netdev_linux_dump_queues(const struct netdev *netdev,
     }
 
     last_error = 0;
-    shash_init(&details);
+    smap_init(&details);
     HMAP_FOR_EACH_SAFE (queue, next_queue, hmap_node,
                         &netdev_dev->tc->queues) {
-        shash_clear(&details);
+        smap_clear(&details);
 
         error = netdev_dev->tc->ops->class_get(netdev, queue, &details);
         if (!error) {
@@ -2026,7 +2032,7 @@ netdev_linux_dump_queues(const struct netdev *netdev,
             last_error = error;
         }
     }
-    shash_destroy(&details);
+    smap_destroy(&details);
 
     return last_error;
 }
@@ -2271,7 +2277,7 @@ netdev_linux_get_next_hop(const struct in_addr *host, struct in_addr *next_hop,
 }
 
 static int
-netdev_linux_get_drv_info(const struct netdev *netdev, struct shash *sh)
+netdev_linux_get_drv_info(const struct netdev *netdev, struct smap *smap)
 {
     int error;
     struct netdev_dev_linux *netdev_dev =
@@ -2279,17 +2285,18 @@ netdev_linux_get_drv_info(const struct netdev *netdev, struct shash *sh)
 
     error = netdev_linux_get_drvinfo(netdev_dev);
     if (!error) {
-        shash_add(sh, "driver_name", xstrdup(netdev_dev->drvinfo.driver));
-        shash_add(sh, "driver_version", xstrdup(netdev_dev->drvinfo.version));
-        shash_add(sh, "firmware_version", xstrdup(netdev_dev->drvinfo.fw_version));
+        smap_add(smap, "driver_name", netdev_dev->drvinfo.driver);
+        smap_add(smap, "driver_version", netdev_dev->drvinfo.version);
+        smap_add(smap, "firmware_version", netdev_dev->drvinfo.fw_version);
     }
     return error;
 }
 
 static int
-netdev_internal_get_drv_info(const struct netdev *netdev OVS_UNUSED, struct shash *sh)
+netdev_internal_get_drv_info(const struct netdev *netdev OVS_UNUSED,
+                             struct smap *smap)
 {
-    shash_add(sh, "driver_name", xstrdup("openvswitch"));
+    smap_add(smap, "driver_name", "openvswitch");
     return 0;
 }
 
@@ -2651,11 +2658,11 @@ htb_parse_tcmsg__(struct ofpbuf *tcmsg, unsigned int *queue_id,
 
 static void
 htb_parse_qdisc_details__(struct netdev *netdev,
-                          const struct shash *details, struct htb_class *hc)
+                          const struct smap *details, struct htb_class *hc)
 {
     const char *max_rate_s;
 
-    max_rate_s = shash_find_data(details, "max-rate");
+    max_rate_s = smap_get(details, "max-rate");
     hc->max_rate = max_rate_s ? strtoull(max_rate_s, NULL, 10) / 8 : 0;
     if (!hc->max_rate) {
         enum netdev_features current;
@@ -2670,13 +2677,13 @@ htb_parse_qdisc_details__(struct netdev *netdev,
 
 static int
 htb_parse_class_details__(struct netdev *netdev,
-                          const struct shash *details, struct htb_class *hc)
+                          const struct smap *details, struct htb_class *hc)
 {
     const struct htb *htb = htb_get__(netdev);
-    const char *min_rate_s = shash_find_data(details, "min-rate");
-    const char *max_rate_s = shash_find_data(details, "max-rate");
-    const char *burst_s = shash_find_data(details, "burst");
-    const char *priority_s = shash_find_data(details, "priority");
+    const char *min_rate_s = smap_get(details, "min-rate");
+    const char *max_rate_s = smap_get(details, "max-rate");
+    const char *burst_s = smap_get(details, "burst");
+    const char *priority_s = smap_get(details, "priority");
     int mtu, error;
 
     error = netdev_get_mtu(netdev, &mtu);
@@ -2734,7 +2741,7 @@ htb_query_class__(const struct netdev *netdev, unsigned int handle,
 }
 
 static int
-htb_tc_install(struct netdev *netdev, const struct shash *details)
+htb_tc_install(struct netdev *netdev, const struct smap *details)
 {
     int error;
 
@@ -2826,15 +2833,15 @@ htb_tc_destroy(struct tc *tc)
 }
 
 static int
-htb_qdisc_get(const struct netdev *netdev, struct shash *details)
+htb_qdisc_get(const struct netdev *netdev, struct smap *details)
 {
     const struct htb *htb = htb_get__(netdev);
-    shash_add(details, "max-rate", xasprintf("%llu", 8ULL * htb->max_rate));
+    smap_add_format(details, "max-rate", "%llu", 8ULL * htb->max_rate);
     return 0;
 }
 
 static int
-htb_qdisc_set(struct netdev *netdev, const struct shash *details)
+htb_qdisc_set(struct netdev *netdev, const struct smap *details)
 {
     struct htb_class hc;
     int error;
@@ -2850,24 +2857,24 @@ htb_qdisc_set(struct netdev *netdev, const struct shash *details)
 
 static int
 htb_class_get(const struct netdev *netdev OVS_UNUSED,
-              const struct tc_queue *queue, struct shash *details)
+              const struct tc_queue *queue, struct smap *details)
 {
     const struct htb_class *hc = htb_class_cast__(queue);
 
-    shash_add(details, "min-rate", xasprintf("%llu", 8ULL * hc->min_rate));
+    smap_add_format(details, "min-rate", "%llu", 8ULL * hc->min_rate);
     if (hc->min_rate != hc->max_rate) {
-        shash_add(details, "max-rate", xasprintf("%llu", 8ULL * hc->max_rate));
+        smap_add_format(details, "max-rate", "%llu", 8ULL * hc->max_rate);
     }
-    shash_add(details, "burst", xasprintf("%llu", 8ULL * hc->burst));
+    smap_add_format(details, "burst", "%llu", 8ULL * hc->burst);
     if (hc->priority) {
-        shash_add(details, "priority", xasprintf("%u", hc->priority));
+        smap_add_format(details, "priority", "%u", hc->priority);
     }
     return 0;
 }
 
 static int
 htb_class_set(struct netdev *netdev, unsigned int queue_id,
-              const struct shash *details)
+              const struct smap *details)
 {
     struct htb_class hc;
     int error;
@@ -3127,13 +3134,13 @@ hfsc_query_class__(const struct netdev *netdev, unsigned int handle,
 }
 
 static void
-hfsc_parse_qdisc_details__(struct netdev *netdev, const struct shash *details,
+hfsc_parse_qdisc_details__(struct netdev *netdev, const struct smap *details,
                            struct hfsc_class *class)
 {
     uint32_t max_rate;
     const char *max_rate_s;
 
-    max_rate_s = shash_find_data(details, "max-rate");
+    max_rate_s = smap_get(details, "max-rate");
     max_rate   = max_rate_s ? strtoull(max_rate_s, NULL, 10) / 8 : 0;
 
     if (!max_rate) {
@@ -3149,7 +3156,7 @@ hfsc_parse_qdisc_details__(struct netdev *netdev, const struct shash *details,
 
 static int
 hfsc_parse_class_details__(struct netdev *netdev,
-                           const struct shash *details,
+                           const struct smap *details,
                            struct hfsc_class * class)
 {
     const struct hfsc *hfsc;
@@ -3157,8 +3164,8 @@ hfsc_parse_class_details__(struct netdev *netdev,
     const char *min_rate_s, *max_rate_s;
 
     hfsc       = hfsc_get__(netdev);
-    min_rate_s = shash_find_data(details, "min-rate");
-    max_rate_s = shash_find_data(details, "max-rate");
+    min_rate_s = smap_get(details, "min-rate");
+    max_rate_s = smap_get(details, "max-rate");
 
     min_rate = min_rate_s ? strtoull(min_rate_s, NULL, 10) / 8 : 0;
     min_rate = MAX(min_rate, 1);
@@ -3259,7 +3266,7 @@ hfsc_setup_class__(struct netdev *netdev, unsigned int handle,
 }
 
 static int
-hfsc_tc_install(struct netdev *netdev, const struct shash *details)
+hfsc_tc_install(struct netdev *netdev, const struct smap *details)
 {
     int error;
     struct hfsc_class class;
@@ -3327,16 +3334,16 @@ hfsc_tc_destroy(struct tc *tc)
 }
 
 static int
-hfsc_qdisc_get(const struct netdev *netdev, struct shash *details)
+hfsc_qdisc_get(const struct netdev *netdev, struct smap *details)
 {
     const struct hfsc *hfsc;
     hfsc = hfsc_get__(netdev);
-    shash_add(details, "max-rate", xasprintf("%llu", 8ULL * hfsc->max_rate));
+    smap_add_format(details, "max-rate", "%llu", 8ULL * hfsc->max_rate);
     return 0;
 }
 
 static int
-hfsc_qdisc_set(struct netdev *netdev, const struct shash *details)
+hfsc_qdisc_set(struct netdev *netdev, const struct smap *details)
 {
     int error;
     struct hfsc_class class;
@@ -3354,21 +3361,21 @@ hfsc_qdisc_set(struct netdev *netdev, const struct shash *details)
 
 static int
 hfsc_class_get(const struct netdev *netdev OVS_UNUSED,
-              const struct tc_queue *queue, struct shash *details)
+              const struct tc_queue *queue, struct smap *details)
 {
     const struct hfsc_class *hc;
 
     hc = hfsc_class_cast__(queue);
-    shash_add(details, "min-rate", xasprintf("%llu", 8ULL * hc->min_rate));
+    smap_add_format(details, "min-rate", "%llu", 8ULL * hc->min_rate);
     if (hc->min_rate != hc->max_rate) {
-        shash_add(details, "max-rate", xasprintf("%llu", 8ULL * hc->max_rate));
+        smap_add_format(details, "max-rate", "%llu", 8ULL * hc->max_rate);
     }
     return 0;
 }
 
 static int
 hfsc_class_set(struct netdev *netdev, unsigned int queue_id,
-               const struct shash *details)
+               const struct smap *details)
 {
     int error;
     struct hfsc_class class;
@@ -3473,7 +3480,7 @@ default_install__(struct netdev *netdev)
 
 static int
 default_tc_install(struct netdev *netdev,
-                   const struct shash *details OVS_UNUSED)
+                   const struct smap *details OVS_UNUSED)
 {
     default_install__(netdev);
     return 0;
@@ -4196,6 +4203,7 @@ netdev_linux_ethtool_set_flag(struct netdev *netdev, uint32_t flag,
     uint32_t new_flags;
     int error;
 
+    COVERAGE_INC(netdev_get_ethtool);
     memset(&evalue, 0, sizeof evalue);
     error = netdev_linux_do_ethtool(netdev_name,
                                     (struct ethtool_cmd *)&evalue,
@@ -4204,6 +4212,7 @@ netdev_linux_ethtool_set_flag(struct netdev *netdev, uint32_t flag,
         return error;
     }
 
+    COVERAGE_INC(netdev_set_ethtool);
     evalue.data = new_flags = (evalue.data & ~flag) | (enable ? flag : 0);
     error = netdev_linux_do_ethtool(netdev_name,
                                     (struct ethtool_cmd *)&evalue,
@@ -4212,6 +4221,7 @@ netdev_linux_ethtool_set_flag(struct netdev *netdev, uint32_t flag,
         return error;
     }
 
+    COVERAGE_INC(netdev_get_ethtool);
     memset(&evalue, 0, sizeof evalue);
     error = netdev_linux_do_ethtool(netdev_name,
                                     (struct ethtool_cmd *)&evalue,
@@ -4487,7 +4497,6 @@ netdev_linux_do_ethtool(const char *name, struct ethtool_cmd *ecmd,
     ifr.ifr_data = (caddr_t) ecmd;
 
     ecmd->cmd = cmd;
-    COVERAGE_INC(netdev_ethtool);
     if (ioctl(af_inet_sock, SIOCETHTOOL, &ifr) == 0) {
         return 0;
     } else {

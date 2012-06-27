@@ -104,7 +104,11 @@ The available commands are:
   echo_error              [[arg ...]]
   exit
   help
+  log                     [[arg ...]]
   version
+  vlog/list
+  vlog/reopen
+  vlog/set                spec
 ])
 mv stdout expout
 AT_CHECK([PYAPPCTL -t test-unixctl.py help], [0], [expout])

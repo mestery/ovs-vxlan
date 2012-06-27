@@ -1,4 +1,4 @@
-# Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012 Nicira Networks, Inc.
+# Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -20,9 +20,17 @@ AM_CFLAGS += $(WARNING_FLAGS)
 if NDEBUG
 AM_CPPFLAGS += -DNDEBUG
 AM_CFLAGS += -fomit-frame-pointer
-else
-AM_LDFLAGS = -export-dynamic
 endif
+
+# PYTHONDONTWRITEBYTECODE=yes keeps Python from creating .pyc and .pyo
+# files.  Creating .py[co] works OK for any given version of Open
+# vSwitch, but it causes trouble if you switch from a version with
+# foo/__init__.py into an (older) version with plain foo.py, since
+# foo/__init__.pyc will cause Python to ignore foo.py.
+run_python = \
+	PYTHONDONTWRITEBYTECODE=yes \
+	PYTHONPATH=$(top_srcdir)/python:$$PYTHONPATH \
+	$(PYTHON)
 
 ALL_LOCAL =
 BUILT_SOURCES =
@@ -33,13 +41,16 @@ PYCOV_CLEAN_FILES = build-aux/check-structs,cover
 EXTRA_DIST = \
 	CodingStyle \
 	DESIGN \
+	FAQ \
 	INSTALL.KVM \
+	INSTALL.Libvirt \
 	INSTALL.Linux \
 	INSTALL.RHEL \
 	INSTALL.SSL \
 	INSTALL.XenServer \
 	INSTALL.bridge \
 	INSTALL.userspace \
+	IntegrationGuide \
 	NOTICE \
 	PORTING \
 	README-gcov \

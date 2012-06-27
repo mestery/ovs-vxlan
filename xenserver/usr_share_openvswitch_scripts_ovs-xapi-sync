@@ -1,5 +1,5 @@
 #!/usr/bin/python
-# Copyright (c) 2009, 2010, 2011, 2012 Nicira Networks
+# Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -35,6 +35,7 @@ from ovs.db import types
 import ovs.daemon
 import ovs.db.idl
 import ovs.unixctl
+import ovs.unixctl.server
 
 vlog = ovs.vlog.Vlog("ovs-xapi-sync")
 session = None
@@ -236,7 +237,7 @@ def main():
     ovs.unixctl.command_register("exit", "", 0, 0, unixctl_exit, None)
     ovs.unixctl.command_register("flush-cache", "", 0, 0, unixctl_flush_cache,
                                  None)
-    error, unixctl_server = ovs.unixctl.UnixctlServer.create(None)
+    error, unixctl_server = ovs.unixctl.server.UnixctlServer.create(None)
     if error:
         ovs.util.ovs_fatal(error, "could not create unixctl server", vlog)
 
@@ -361,6 +362,7 @@ def main():
         iface_ids = new_iface_ids
         vm_ids = new_vm_ids
 
+        txn.add_comment("ovs-xapi-sync: Updating records from XAPI")
         txn.commit_block()
 
     unixctl_server.close()

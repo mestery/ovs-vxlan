@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,6 +40,9 @@
 #include "vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(ofp_parse);
+
+static void ofp_fatal(const char *flow, bool verbose, const char *format, ...)
+    NO_RETURN;
 
 static uint8_t
 str_to_table_id(const char *str)
@@ -589,6 +592,12 @@ parse_ofp_str(struct ofputil_flow_mod *fm, int command, const char *str_,
     cls_rule_init_catchall(&fm->cr, OFP_DEFAULT_PRIORITY);
     fm->cookie = htonll(0);
     fm->cookie_mask = htonll(0);
+    if (command == OFPFC_MODIFY || command == OFPFC_MODIFY_STRICT) {
+        /* For modify, by default, don't update the cookie. */
+        fm->new_cookie = htonll(UINT64_MAX);
+    } else{
+        fm->new_cookie = htonll(0);
+    }
     fm->table_id = 0xff;
     fm->command = command;
     fm->idle_timeout = OFP_FLOW_PERMANENT;
@@ -643,17 +652,24 @@ parse_ofp_str(struct ofputil_flow_mod *fm, int command, const char *str_,
                 fm->hard_timeout = str_to_u16(value, name);
             } else if (!strcmp(name, "cookie")) {
                 char *mask = strchr(value, '/');
+
                 if (mask) {
+                    /* A mask means we're searching for a cookie. */
                     if (command == OFPFC_ADD) {
                         ofp_fatal(str_, verbose, "flow additions cannot use "
                                   "a cookie mask");
                     }
                     *mask = '\0';
+                    fm->cookie = htonll(str_to_u64(value));
                     fm->cookie_mask = htonll(str_to_u64(mask+1));
                 } else {
-                    fm->cookie_mask = htonll(UINT64_MAX);
+                    /* No mask means that the cookie is being set. */
+                    if (command != OFPFC_ADD && command != OFPFC_MODIFY
+                            && command != OFPFC_MODIFY_STRICT) {
+                        ofp_fatal(str_, verbose, "cannot set cookie");
+                    }
+                    fm->new_cookie = htonll(str_to_u64(value));
                 }
-                fm->cookie = htonll(str_to_u64(value));
             } else if (mf_from_name(name)) {
                 parse_field(mf_from_name(name), value, &fm->cr);
             } else if (!strcmp(name, "duration")
@@ -666,6 +682,13 @@ parse_ofp_str(struct ofputil_flow_mod *fm, int command, const char *str_,
                 ofp_fatal(str_, verbose, "unknown keyword %s", name);
             }
         }
+    }
+    if (!fm->cookie_mask && fm->new_cookie == htonll(UINT64_MAX)
+            && (command == OFPFC_MODIFY || command == OFPFC_MODIFY_STRICT)) {
+        /* On modifies without a mask, we are supposed to add a flow if
+         * one does not exist.  If a cookie wasn't been specified, use a
+         * default of zero. */
+        fm->new_cookie = htonll(0);
     }
     if (fields & F_ACTIONS) {
         struct ofpbuf actions;
@@ -754,4 +777,81 @@ parse_ofp_flow_stats_request_str(struct ofputil_flow_stats_request *fsr,
     fsr->match = fm.cr;
     fsr->out_port = fm.out_port;
     fsr->table_id = fm.table_id;
+}
+
+/* Parses a specification of a flow from 's' into 'flow'.  's' must take the
+ * form FIELD=VALUE[,FIELD=VALUE]... where each FIELD is the name of a
+ * mf_field.  Fields must be specified in a natural order for satisfying
+ * prerequisites.
+ *
+ * Returns NULL on success, otherwise a malloc()'d string that explains the
+ * problem. */
+char *
+parse_ofp_exact_flow(struct flow *flow, const char *s)
+{
+    char *pos, *key, *value_s;
+    char *error = NULL;
+    char *copy;
+
+    memset(flow, 0, sizeof *flow);
+
+    pos = copy = xstrdup(s);
+    while (ofputil_parse_key_value(&pos, &key, &value_s)) {
+        const struct protocol *p;
+        if (parse_protocol(key, &p)) {
+            if (flow->dl_type) {
+                error = xasprintf("%s: Ethernet type set multiple times", s);
+                goto exit;
+            }
+            flow->dl_type = htons(p->dl_type);
+
+            if (p->nw_proto) {
+                if (flow->nw_proto) {
+                    error = xasprintf("%s: network protocol set "
+                                      "multiple times", s);
+                    goto exit;
+                }
+                flow->nw_proto = p->nw_proto;
+            }
+        } else {
+            const struct mf_field *mf;
+            union mf_value value;
+            char *field_error;
+
+            mf = mf_from_name(key);
+            if (!mf) {
+                error = xasprintf("%s: unknown field %s", s, key);
+                goto exit;
+            }
+
+            if (!mf_are_prereqs_ok(mf, flow)) {
+                error = xasprintf("%s: prerequisites not met for setting %s",
+                                  s, key);
+                goto exit;
+            }
+
+            if (!mf_is_zero(mf, flow)) {
+                error = xasprintf("%s: field %s set multiple times", s, key);
+                goto exit;
+            }
+
+            field_error = mf_parse_value(mf, value_s, &value);
+            if (field_error) {
+                error = xasprintf("%s: bad value for %s (%s)",
+                                  s, key, field_error);
+                free(field_error);
+                goto exit;
+            }
+
+            mf_set_flow_value(mf, &value, flow);
+        }
+    }
+
+exit:
+    free(copy);
+
+    if (error) {
+        memset(flow, 0, sizeof *flow);
+    }
+    return error;
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -88,6 +88,8 @@ static void log_operation(const struct dpif *, const char *operation,
                           int error);
 static bool should_log_flow_message(int error);
 static void log_flow_put_message(struct dpif *, const struct dpif_flow_put *,
+                                 int error);
+static void log_flow_del_message(struct dpif *, const struct dpif_flow_del *,
                                  int error);
 static void log_execute_message(struct dpif *, const struct dpif_execute *,
                                 int error);
@@ -539,6 +541,9 @@ dpif_get_max_ports(const struct dpif *dpif)
  * as the OVS_USERSPACE_ATTR_PID attribute's value, for use in flows whose
  * packets arrived on port 'port_no'.
  *
+ * A 'port_no' of UINT16_MAX is a special case: it returns a reserved PID, not
+ * allocated to any port, that the client may use for special purposes.
+ *
  * The return value is only meaningful when DPIF_UC_ACTION has been enabled in
  * the 'dpif''s listen mask.  It is allowed to change when DPIF_UC_ACTION is
  * disabled and then re-enabled, so a client that does that must be prepared to
@@ -672,16 +677,15 @@ dpif_port_poll_wait(const struct dpif *dpif)
 }
 
 /* Extracts the flow stats for a packet.  The 'flow' and 'packet'
- * arguments must have been initialized through a call to flow_extract().
- */
+ * arguments must have been initialized through a call to flow_extract(). */
 void
 dpif_flow_stats_extract(const struct flow *flow, const struct ofpbuf *packet,
                         struct dpif_flow_stats *stats)
 {
-    memset(stats, 0, sizeof(*stats));
     stats->tcp_flags = packet_get_tcp_flags(packet, flow);
     stats->n_bytes = packet->size;
     stats->n_packets = 1;
+    stats->used = time_msec();
 }
 
 /* Appends a human-readable representation of 'stats' to 's'. */
@@ -695,7 +699,10 @@ dpif_flow_stats_format(const struct dpif_flow_stats *stats, struct ds *s)
     } else {
         ds_put_format(s, "never");
     }
-    /* XXX tcp_flags? */
+    if (stats->tcp_flags) {
+        ds_put_cstr(s, ", flags:");
+        packet_format_tcp_flags(s, stats->tcp_flags);
+    }
 }
 
 /* Deletes all flows from 'dpif'.  Returns 0 if successful, otherwise a
@@ -815,6 +822,21 @@ dpif_flow_put(struct dpif *dpif, enum dpif_flow_put_flags flags,
     return dpif_flow_put__(dpif, &put);
 }
 
+static int
+dpif_flow_del__(struct dpif *dpif, struct dpif_flow_del *del)
+{
+    int error;
+
+    COVERAGE_INC(dpif_flow_del);
+
+    error = dpif->dpif_class->flow_del(dpif, del);
+    if (error && del->stats) {
+        memset(del->stats, 0, sizeof *del->stats);
+    }
+    log_flow_del_message(dpif, del, error);
+    return error;
+}
+
 /* Deletes a flow from 'dpif' and returns 0, or returns ENOENT if 'dpif' does
  * not contain such a flow.  The flow is specified by the Netlink attributes
  * with types OVS_KEY_ATTR_* in the 'key_len' bytes starting at 'key'.
@@ -826,19 +848,12 @@ dpif_flow_del(struct dpif *dpif,
               const struct nlattr *key, size_t key_len,
               struct dpif_flow_stats *stats)
 {
-    int error;
+    struct dpif_flow_del del;
 
-    COVERAGE_INC(dpif_flow_del);
-
-    error = dpif->dpif_class->flow_del(dpif, key, key_len, stats);
-    if (error && stats) {
-        memset(stats, 0, sizeof *stats);
-    }
-    if (should_log_flow_message(error)) {
-        log_flow_message(dpif, error, "flow_del", key, key_len,
-                         !error ? stats : NULL, NULL, 0);
-    }
-    return error;
+    del.key = key;
+    del.key_len = key_len;
+    del.stats = stats;
+    return dpif_flow_del__(dpif, &del);
 }
 
 /* Initializes 'dump' to begin dumping the flows in a dpif.
@@ -994,6 +1009,10 @@ dpif_operate(struct dpif *dpif, struct dpif_op **ops, size_t n_ops)
                 log_flow_put_message(dpif, &op->u.flow_put, op->error);
                 break;
 
+            case DPIF_OP_FLOW_DEL:
+                log_flow_del_message(dpif, &op->u.flow_del, op->error);
+                break;
+
             case DPIF_OP_EXECUTE:
                 log_execute_message(dpif, &op->u.execute, op->error);
                 break;
@@ -1008,6 +1027,10 @@ dpif_operate(struct dpif *dpif, struct dpif_op **ops, size_t n_ops)
         switch (op->type) {
         case DPIF_OP_FLOW_PUT:
             op->error = dpif_flow_put__(dpif, &op->u.flow_put);
+            break;
+
+        case DPIF_OP_FLOW_DEL:
+            op->error = dpif_flow_del__(dpif, &op->u.flow_del);
             break;
 
         case DPIF_OP_EXECUTE:
@@ -1048,21 +1071,20 @@ dpif_recv_set(struct dpif *dpif, bool enable)
 }
 
 /* Polls for an upcall from 'dpif'.  If successful, stores the upcall into
- * '*upcall'.  Should only be called if dpif_recv_set() has been used to enable
- * receiving packets on 'dpif'.
+ * '*upcall', using 'buf' for storage.  Should only be called if
+ * dpif_recv_set() has been used to enable receiving packets on 'dpif'.
  *
- * The caller takes ownership of the data that 'upcall' points to.
- * 'upcall->key' and 'upcall->actions' (if nonnull) point into data owned by
- * 'upcall->packet', so their memory cannot be freed separately.  (This is
+ * 'upcall->packet' and 'upcall->key' point into data in the caller-provided
+ * 'buf', so their memory cannot be freed separately from 'buf'.  (This is
  * hardly a great way to do things but it works out OK for the dpif providers
  * and clients that exist so far.)
  *
  * Returns 0 if successful, otherwise a positive errno value.  Returns EAGAIN
  * if no upcall is immediately available. */
 int
-dpif_recv(struct dpif *dpif, struct dpif_upcall *upcall)
+dpif_recv(struct dpif *dpif, struct dpif_upcall *upcall, struct ofpbuf *buf)
 {
-    int error = dpif->dpif_class->recv(dpif, upcall);
+    int error = dpif->dpif_class->recv(dpif, upcall, buf);
     if (!error && !VLOG_DROP_DBG(&dpmsg_rl)) {
         struct ds flow;
         char *packet;
@@ -1242,6 +1264,16 @@ log_flow_put_message(struct dpif *dpif, const struct dpif_flow_put *put,
                          put->key, put->key_len, put->stats,
                          put->actions, put->actions_len);
         ds_destroy(&s);
+    }
+}
+
+static void
+log_flow_del_message(struct dpif *dpif, const struct dpif_flow_del *del,
+                     int error)
+{
+    if (should_log_flow_message(error)) {
+        log_flow_message(dpif, error, "flow_del", del->key, del->key_len,
+                         !error ? del->stats : NULL, NULL, 0);
     }
 }
 

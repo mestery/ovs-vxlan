@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2012 Nicira Networks.
+ * Copyright (c) 2007-2012 Nicira, Inc.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of version 2 of the GNU General Public
@@ -19,6 +19,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/version.h>
+#include <linux/completion.h>
 #include <net/genetlink.h>
 #include "genl_exec.h"
 

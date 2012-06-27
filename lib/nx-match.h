@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -43,7 +43,7 @@ enum ofperr nx_pull_match(struct ofpbuf *, unsigned int match_len,
 enum ofperr nx_pull_match_loose(struct ofpbuf *, unsigned int match_len,
                                 uint16_t priority, struct cls_rule *,
                                 ovs_be64 *cookie, ovs_be64 *cookie_mask);
-int nx_put_match(struct ofpbuf *, const struct cls_rule *,
+int nx_put_match(struct ofpbuf *, bool oxm, const struct cls_rule *,
                  ovs_be64 cookie, ovs_be64 cookie_mask);
 
 char *nx_match_to_string(const uint8_t *, unsigned int match_len);
@@ -90,15 +90,15 @@ void nxm_decode(struct mf_subfield *, ovs_be32 header, ovs_be16 ofs_nbits);
 void nxm_decode_discrete(struct mf_subfield *, ovs_be32 header,
                          ovs_be16 ofs, ovs_be16 n_bits);
 
-BUILD_ASSERT_DECL(FLOW_WC_SEQ == 9);
+BUILD_ASSERT_DECL(FLOW_WC_SEQ == 12);
 /* Upper bound on the length of an nx_match.  The longest nx_match (an
- * IPV6 neighbor discovery message using 5 registers) would be:
+ * IPV6 neighbor discovery message using all the registers) would be:
  *
  *                   header  value  mask  total
  *                   ------  -----  ----  -----
  *  NXM_OF_IN_PORT      4       2    --      6
  *  NXM_OF_ETH_DST_W    4       6     6     16
- *  NXM_OF_ETH_SRC      4       6    --     10
+ *  NXM_OF_ETH_SRC_W    4       6     6     16
  *  NXM_OF_ETH_TYPE     4       2    --      6
  *  NXM_OF_VLAN_TCI     4       2     2      8
  *  NXM_OF_IP_TOS       4       1    --      5
@@ -111,7 +111,7 @@ BUILD_ASSERT_DECL(FLOW_WC_SEQ == 9);
  *  NXM_OF_IPV6_LABEL   4       4    --      8
  *  NXM_OF_ICMP_TYPE    4       1    --      5
  *  NXM_OF_ICMP_CODE    4       1    --      5
- *  NXM_NX_ND_TARGET    4      16    --     20
+ *  NXM_NX_ND_TARGET    4      16    16     36
  *  NXM_NX_ND_SLL       4       6    --     10
  *  NXM_NX_REG_W(0)     4       4     4     12
  *  NXM_NX_REG_W(1)     4       4     4     12
@@ -122,12 +122,13 @@ BUILD_ASSERT_DECL(FLOW_WC_SEQ == 9);
  *  NXM_NX_REG_W(6)     4       4     4     12
  *  NXM_NX_REG_W(7)     4       4     4     12
  *  NXM_NX_TUN_ID_W     4       8     8     20
+ *  OXM_OF_METADATA     4       8     8     20
  *  -------------------------------------------
- *  total                                  311
+ *  total                                  353
  *
  * So this value is conservative.
  */
-#define NXM_MAX_LEN 384
+#define NXM_MAX_LEN 400
 
 /* This is my guess at the length of a "typical" nx_match, for use in
  * predicting space requirements. */

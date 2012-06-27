@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2012 Nicira Networks.
+ * Copyright (c) 2007-2012 Nicira, Inc.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of version 2 of the GNU General Public
@@ -39,7 +39,6 @@
 #include <linux/version.h>
 #include <linux/ethtool.h>
 #include <linux/wait.h>
-#include <asm/system.h>
 #include <asm/div64.h>
 #include <linux/highmem.h>
 #include <linux/netfilter_bridge.h>
@@ -62,8 +61,8 @@
 #include "vport-internal_dev.h"
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,18) || \
-    LINUX_VERSION_CODE >= KERNEL_VERSION(3,4,0)
-#error Kernels before 2.6.18 or after 3.3 are not supported by this version of Open vSwitch.
+    LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+#error Kernels before 2.6.18 or after 3.4 are not supported by this version of Open vSwitch.
 #endif
 
 #define REHASH_FLOW_INTERVAL (10 * 60 * HZ)
@@ -411,8 +410,8 @@ static int queue_gso_packets(struct net *net, int dp_ifindex,
 	int err;
 
 	segs = skb_gso_segment(skb, NETIF_F_SG | NETIF_F_HW_CSUM);
-	if (IS_ERR(skb))
-		return PTR_ERR(skb);
+	if (IS_ERR(segs))
+		return PTR_ERR(segs);
 
 	/* Queue all of the segments. */
 	skb = segs;
@@ -558,6 +557,19 @@ static int validate_sample(const struct nlattr *attr,
 	return validate_actions(actions, key, depth + 1);
 }
 
+static int validate_tp_port(const struct sw_flow_key *flow_key)
+{
+	if (flow_key->eth.type == htons(ETH_P_IP)) {
+		if (flow_key->ipv4.tp.src && flow_key->ipv4.tp.dst)
+			return 0;
+	} else if (flow_key->eth.type == htons(ETH_P_IPV6)) {
+		if (flow_key->ipv6.tp.src && flow_key->ipv6.tp.dst)
+			return 0;
+	}
+
+	return -EINVAL;
+}
+
 static int validate_set(const struct nlattr *a,
 			const struct sw_flow_key *flow_key)
 {
@@ -609,18 +621,13 @@ static int validate_set(const struct nlattr *a,
 		if (flow_key->ip.proto != IPPROTO_TCP)
 			return -EINVAL;
 
-		if (!flow_key->ipv4.tp.src || !flow_key->ipv4.tp.dst)
-			return -EINVAL;
-
-		break;
+		return validate_tp_port(flow_key);
 
 	case OVS_KEY_ATTR_UDP:
 		if (flow_key->ip.proto != IPPROTO_UDP)
 			return -EINVAL;
 
-		if (!flow_key->ipv4.tp.src || !flow_key->ipv4.tp.dst)
-			return -EINVAL;
-		break;
+		return validate_tp_port(flow_key);
 
 	default:
 		return -EINVAL;
@@ -1892,16 +1899,17 @@ static int ovs_vport_cmd_set(struct sk_buff *skb, struct genl_info *info)
 		err = ovs_vport_set_options(vport, a[OVS_VPORT_ATTR_OPTIONS]);
 	if (!err)
 		err = change_vport(vport, a);
+	else
+		goto exit_unlock;
 	if (!err && a[OVS_VPORT_ATTR_UPCALL_PID])
 		vport->upcall_pid = nla_get_u32(a[OVS_VPORT_ATTR_UPCALL_PID]);
 
 	reply = ovs_vport_cmd_build_info(vport, info->snd_pid, info->snd_seq,
 					 OVS_VPORT_CMD_NEW);
 	if (IS_ERR(reply)) {
-		err = PTR_ERR(reply);
 		netlink_set_err(GENL_SOCK(sock_net(skb->sk)), 0,
-				ovs_dp_vport_multicast_group.id, err);
-		return 0;
+				ovs_dp_vport_multicast_group.id, PTR_ERR(reply));
+		goto exit_unlock;
 	}
 
 	genl_notify(reply, genl_info_net(info), info->snd_pid,

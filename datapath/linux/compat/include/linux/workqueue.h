@@ -1,23 +1,19 @@
 #ifndef __LINUX_WORKQUEUE_WRAPPER_H
 #define __LINUX_WORKQUEUE_WRAPPER_H 1
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,23)
-#include_next <linux/workqueue.h>
-static inline int __init ovs_workqueues_init(void) { return 0; }
-static inline void  ovs_workqueues_exit(void) {}
-
-#else
 #include <linux/timer.h>
 
 int __init ovs_workqueues_init(void);
 void ovs_workqueues_exit(void);
 
-
 /* Older kernels have an implementation of work queues with some very bad
  * characteristics when trying to cancel work (potential deadlocks, use after
  * free, etc.  Therefore we implement simple ovs specific work queue using
  * single worker thread. work-queue API are kept similar for compatibility.
+ * It seems it is useful even on newer kernel. As it can avoid system wide
+ * freeze in event of softlockup due to workq blocked on genl_lock.
  */
+
 struct work_struct;
 
 typedef void (*work_func_t)(struct work_struct *work);
@@ -29,6 +25,9 @@ struct work_struct {
 	atomic_long_t data;
 	struct list_head entry;
 	work_func_t func;
+#ifdef CONFIG_LOCKDEP
+	struct lockdep_map lockdep_map;
+#endif
 };
 
 #define WORK_DATA_INIT()        ATOMIC_LONG_INIT(0)
@@ -68,6 +67,6 @@ int cancel_delayed_work_sync(struct delayed_work *dwork);
 		(_work)->func = (_func);			\
 	} while (0)
 
-#endif /* kernel version < 2.6.23 */
+extern void flush_scheduled_work(void);
 
 #endif

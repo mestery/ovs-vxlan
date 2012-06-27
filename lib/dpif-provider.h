@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -136,6 +136,10 @@ struct dpif_class {
      * actions as the OVS_USERSPACE_ATTR_PID attribute's value, for use in
      * flows whose packets arrived on port 'port_no'.
      *
+     * A 'port_no' of UINT16_MAX should be treated as a special case.  The
+     * implementation should return a reserved PID, not allocated to any port,
+     * that the client may use for special purposes.
+     *
      * The return value only needs to be meaningful when DPIF_UC_ACTION has
      * been enabled in the 'dpif''s listen mask, and it is allowed to change
      * when DPIF_UC_ACTION is disabled and then re-enabled.
@@ -235,14 +239,12 @@ struct dpif_class {
 
     /* Deletes a flow from 'dpif' and returns 0, or returns ENOENT if 'dpif'
      * does not contain such a flow.  The flow is specified by the Netlink
-     * attributes with types OVS_KEY_ATTR_* in the 'key_len' bytes starting at
-     * 'key'.
+     * attributes with types OVS_KEY_ATTR_* in the 'del->key_len' bytes
+     * starting at 'del->key'.
      *
-     * If the operation succeeds, then 'stats', if nonnull, must be set to the
-     * flow's statistics before its deletion. */
-    int (*flow_del)(struct dpif *dpif,
-                    const struct nlattr *key, size_t key_len,
-                    struct dpif_flow_stats *stats);
+     * If the operation succeeds, then 'del->stats', if nonnull, must be set to
+     * the flow's statistics before its deletion. */
+    int (*flow_del)(struct dpif *dpif, const struct dpif_flow_del *del);
 
     /* Deletes all flows from 'dpif' and clears all of its queues of received
      * packets. */
@@ -309,21 +311,19 @@ struct dpif_class {
                              uint32_t *priority);
 
     /* Polls for an upcall from 'dpif'.  If successful, stores the upcall into
-     * '*upcall'.  Should only be called if 'recv_set' has been used to enable
-     * receiving packets from 'dpif'.
+     * '*upcall', using 'buf' for storage.  Should only be called if 'recv_set'
+     * has been used to enable receiving packets from 'dpif'.
      *
-     * The caller takes ownership of the data that 'upcall' points to.
-     * 'upcall->key' and 'upcall->actions' (if nonnull) point into data owned
-     * by 'upcall->packet', so their memory cannot be freed separately.  (This
-     * is hardly a great way to do things but it works out OK for the dpif
-     * providers that exist so far.)
-     *
-     * For greatest efficiency, 'upcall->packet' should have at least
-     * offsetof(struct ofp_packet_in, data) bytes of headroom.
+     * The implementation should point 'upcall->packet' and 'upcall->key' into
+     * data in the caller-provided 'buf'.  If necessary to make room, the
+     * implementation may expand the data in 'buf'.  (This is hardly a great
+     * way to do things but it works out OK for the dpif providers that exist
+     * so far.)
      *
      * This function must not block.  If no upcall is pending when it is
      * called, it should return EAGAIN without blocking. */
-    int (*recv)(struct dpif *dpif, struct dpif_upcall *upcall);
+    int (*recv)(struct dpif *dpif, struct dpif_upcall *upcall,
+                struct ofpbuf *buf);
 
     /* Arranges for the poll loop to wake up when 'dpif' has a message queued
      * to be received with the recv member function. */

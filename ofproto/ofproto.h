@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,6 +39,7 @@ struct netdev;
 struct ofproto;
 struct ofport;
 struct shash;
+struct simap;
 struct netdev_stats;
 
 struct ofproto_controller_info {
@@ -131,7 +132,7 @@ struct ofproto_controller {
     uint8_t dscp;               /* DSCP value for controller connection. */
 };
 
-#define DEFAULT_MFR_DESC "Nicira Networks, Inc."
+#define DEFAULT_MFR_DESC "Nicira, Inc."
 #define DEFAULT_HW_DESC "Open vSwitch"
 #define DEFAULT_SW_DESC VERSION
 #define DEFAULT_SERIAL_DESC "None"
@@ -152,6 +153,8 @@ int ofproto_run(struct ofproto *);
 int ofproto_run_fast(struct ofproto *);
 void ofproto_wait(struct ofproto *);
 bool ofproto_is_alive(const struct ofproto *);
+
+void ofproto_get_memory_usage(const struct ofproto *, struct simap *);
 
 /* A port within an OpenFlow switch.
  *

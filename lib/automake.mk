@@ -1,4 +1,4 @@
-# Copyright (C) 2009, 2010, 2011, 2012 Nicira Networks, Inc.
+# Copyright (C) 2009, 2010, 2011, 2012 Nicira, Inc.
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -79,6 +79,8 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/lockfile.h \
 	lib/mac-learning.c \
 	lib/mac-learning.h \
+	lib/memory.c \
+	lib/memory.h \
 	lib/meta-flow.c \
 	lib/meta-flow.h \
 	lib/multipath.c \
@@ -135,8 +137,12 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/sha1.h \
 	lib/shash.c \
 	lib/shash.h \
+	lib/simap.c \
+	lib/simap.h \
 	lib/signals.c \
 	lib/signals.h \
+	lib/smap.c \
+	lib/smap.h \
 	lib/socket-util.c \
 	lib/socket-util.h \
 	lib/sort.c \
@@ -167,6 +173,8 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/timer.h \
 	lib/timeval.c \
 	lib/timeval.h \
+	lib/token-bucket.c \
+	lib/token-bucket.h \
 	lib/type-props.h \
 	lib/unaligned.h \
 	lib/unicode.c \
@@ -253,6 +261,7 @@ EXTRA_DIST += \
 MAN_FRAGMENTS += \
 	lib/common.man \
 	lib/common-syn.man \
+	lib/coverage-unixctl.man \
 	lib/daemon.man \
 	lib/daemon-syn.man \
 	lib/leak-checker.man \
@@ -297,9 +306,9 @@ lib/dirs.c: lib/dirs.c.in Makefile
 
 $(srcdir)/lib/ofp-errors.inc: \
 	lib/ofp-errors.h $(srcdir)/build-aux/extract-ofp-errors
-	$(PYTHON) $(srcdir)/build-aux/extract-ofp-errors \
+	$(run_python) $(srcdir)/build-aux/extract-ofp-errors \
 		$(srcdir)/lib/ofp-errors.h > $@.tmp && mv $@.tmp $@
-lib/ofp-errors.c: lib/ofp-errors.inc
+$(srcdir)/lib/ofp-errors.c: $(srcdir)/lib/ofp-errors.inc
 EXTRA_DIST += build-aux/extract-ofp-errors lib/ofp-errors.inc
 
 INSTALL_DATA_LOCAL += lib-install-data-local

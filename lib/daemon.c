@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -245,6 +245,17 @@ daemonize(void)
     daemonize_complete();
 }
 
+/* Forks, then:
+ *
+ *   - In the parent, waits for the child to signal that it has completed its
+ *     startup sequence.  Then stores -1 in '*fdp' and returns the child's pid.
+ *
+ *   - In the child, stores a fd in '*fdp' and returns 0.  The caller should
+ *     pass the fd to fork_notify_startup() after it finishes its startup
+ *     sequence.
+ *
+ * If something goes wrong with the fork, logs a critical error and aborts the
+ * process. */
 static pid_t
 fork_and_wait_for_startup(int *fdp)
 {

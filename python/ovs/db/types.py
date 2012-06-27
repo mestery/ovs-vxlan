@@ -1,4 +1,4 @@
-# Copyright (c) 2009, 2010, 2011, 2012 Nicira Networks
+# Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -449,6 +449,11 @@ class Type(object):
 
     def is_map(self):
         return self.value is not None
+
+    def is_smap(self):
+        return (self.is_map()
+                and self.key.type == StringType
+                and self.value.type == StringType)
 
     def is_optional_pointer(self):
         return (self.is_optional() and not self.value

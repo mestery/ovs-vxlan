@@ -1,6 +1,6 @@
 ### Configuration options for openvswitch
 
-# Copyright (C) 2009, 2010, 2011 Nicira Networks, Inc.
+# Copyright (C) 2009, 2010, 2011 Nicira, Inc.
 
 # FORCE_COREFILES: If 'yes' then core files will be enabled.
 # FORCE_COREFILES=yes
@@ -21,3 +21,7 @@
 
 # BRCOMPAT: If 'yes' compatibility mode will be enabled.
 # BRCOMPAT=yes
+
+# OVS_CTL_OPTS: Extra options to pass to ovs-ctl.  This is, for example,
+# a suitable place to specify --ovs-vswitchd-wrapper=valgrind.
+# OVS_CTL_OPTS=

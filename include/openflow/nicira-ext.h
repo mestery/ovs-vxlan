@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira Networks
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@
 #include "openflow/openflow.h"
 #include "openvswitch/types.h"
 
-/* The following vendor extensions, proposed by Nicira Networks, are not yet
+/* The following vendor extensions, proposed by Nicira, are not yet
  * standardized, so they are not included in openflow.h.  Some of them may be
  * suitable for standardization; others we never expect to standardize. */
 
@@ -305,6 +305,9 @@ enum nx_role {
  * with value 1<<2 == 4 in port_status_mask[1] determines whether the
  * controller will receive OFPT_PORT_STATUS messages with reason OFPPR_MODIFY
  * (value 2) when the controller has a "slave" role.
+ *
+ * As a side effect, for service controllers, this message changes the
+ * miss_send_len from default of zero to OFP_DEFAULT_MISS_SEND_LEN (128).
  */
 struct nx_async_config {
     struct nicira_header nxh;
@@ -426,7 +429,7 @@ OFP_ASSERT(sizeof(struct nx_action_set_tunnel) == 16);
  * Sets the encapsulating tunnel ID to a 64-bit value. */
 struct nx_action_set_tunnel64 {
     ovs_be16 type;                  /* OFPAT_VENDOR. */
-    ovs_be16 len;                   /* Length is 16. */
+    ovs_be16 len;                   /* Length is 24. */
     ovs_be32 vendor;                /* NX_VENDOR_ID. */
     ovs_be16 subtype;               /* NXAST_SET_TUNNEL64. */
     uint8_t pad[6];
@@ -540,7 +543,7 @@ OFP_ASSERT(sizeof(struct nx_action_pop_queue) == 16);
  */
 struct nx_action_reg_move {
     ovs_be16 type;                  /* OFPAT_VENDOR. */
-    ovs_be16 len;                   /* Length is 16. */
+    ovs_be16 len;                   /* Length is 24. */
     ovs_be32 vendor;                /* NX_VENDOR_ID. */
     ovs_be16 subtype;               /* NXAST_REG_MOVE. */
     ovs_be16 n_bits;                /* Number of bits. */
@@ -579,7 +582,7 @@ OFP_ASSERT(sizeof(struct nx_action_reg_move) == 24);
  */
 struct nx_action_reg_load {
     ovs_be16 type;                  /* OFPAT_VENDOR. */
-    ovs_be16 len;                   /* Length is 16. */
+    ovs_be16 len;                   /* Length is 24. */
     ovs_be32 vendor;                /* NX_VENDOR_ID. */
     ovs_be16 subtype;               /* NXAST_REG_LOAD. */
     ovs_be16 ofs_nbits;             /* (ofs << 6) | (n_bits - 1). */
@@ -786,6 +789,9 @@ enum nx_mp_algorithm {
  *     the new flow.  The new flow copies the source bits into
  *     field[ofs:ofs+n_bits-1].  Actions are executed in the same order as the
  *     flow_mod_specs.
+ *
+ *     A single NXAST_REG_LOAD action writes no more than 64 bits, so n_bits
+ *     greater than 64 yields multiple NXAST_REG_LOAD actions.
  *
  * The flow_mod_spec destination spec for 'dst' of 2 (when 'src' is 0) is
  * empty.  It has the following meaning:
@@ -1146,11 +1152,11 @@ OFP_ASSERT(sizeof(struct nx_action_output_reg) == 24);
 
 /* Flexible flow specifications (aka NXM = Nicira Extended Match).
  *
- * OpenFlow 1.0 has "struct ofp_match" for specifying flow matches.  This
+ * OpenFlow 1.0 has "struct ofp10_match" for specifying flow matches.  This
  * structure is fixed-length and hence difficult to extend.  This section
  * describes a more flexible, variable-length flow match, called "nx_match" for
  * short, that is also supported by Open vSwitch.  This section also defines a
- * replacement for each OpenFlow message that includes struct ofp_match.
+ * replacement for each OpenFlow message that includes struct ofp10_match.
  *
  *
  * Format
@@ -1208,7 +1214,7 @@ OFP_ASSERT(sizeof(struct nx_action_output_reg) == 24);
  *     matches bit J in nxm_value.  A 0-bit in nxm_mask causes the
  *     corresponding bits in nxm_value and the field's value to be ignored.
  *     (The sense of the nxm_mask bits is the opposite of that used by the
- *     "wildcards" member of struct ofp_match.)
+ *     "wildcards" member of struct ofp10_match.)
  *
  *     When nxm_hasmask is 1, nxm_length is always even.
  *
@@ -1365,13 +1371,13 @@ OFP_ASSERT(sizeof(struct nx_action_output_reg) == 24);
  *
  * Format: 48-bit Ethernet MAC address.
  *
- * Masking: The nxm_mask patterns 01:00:00:00:00:00 and FE:FF:FF:FF:FF:FF must
- *   be supported for NXM_OF_ETH_DST_W (as well as the trivial patterns that
- *   are all-0-bits or all-1-bits).  Support for other patterns and for masking
- *   of NXM_OF_ETH_SRC is optional. */
+ * Masking: Fully maskable, in versions 1.8 and later. Earlier versions only
+ *   supported the following masks for NXM_OF_ETH_DST_W: 00:00:00:00:00:00,
+ *   fe:ff:ff:ff:ff:ff, 01:00:00:00:00:00, ff:ff:ff:ff:ff:ff. */
 #define NXM_OF_ETH_DST    NXM_HEADER  (0x0000,  1, 6)
 #define NXM_OF_ETH_DST_W  NXM_HEADER_W(0x0000,  1, 6)
 #define NXM_OF_ETH_SRC    NXM_HEADER  (0x0000,  2, 6)
+#define NXM_OF_ETH_SRC_W  NXM_HEADER_W(0x0000,  2, 6)
 
 /* Packet's Ethernet type.
  *
@@ -1458,7 +1464,8 @@ OFP_ASSERT(sizeof(struct nx_action_output_reg) == 24);
  *
  * Format: 32-bit integer in network byte order.
  *
- * Masking: Only CIDR masks are allowed, that is, masks that consist of N
+ * Masking: Fully maskable, in Open vSwitch 1.8 and later.  In earlier
+ *   versions, only CIDR masks are allowed, that is, masks that consist of N
  *   high-order bits set to 1 and the other 32-N bits set to 0. */
 #define NXM_OF_IP_SRC     NXM_HEADER  (0x0000,  7, 4)
 #define NXM_OF_IP_SRC_W   NXM_HEADER_W(0x0000,  7, 4)
@@ -1527,7 +1534,8 @@ OFP_ASSERT(sizeof(struct nx_action_output_reg) == 24);
  *
  * Format: 32-bit integer in network byte order.
  *
- * Masking: Only CIDR masks are allowed, that is, masks that consist of N
+ * Masking: Fully maskable, in Open vSwitch 1.8 and later.  In earlier
+ *   versions, only CIDR masks are allowed, that is, masks that consist of N
  *   high-order bits set to 1 and the other 32-N bits set to 0. */
 #define NXM_OF_ARP_SPA    NXM_HEADER  (0x0000, 16, 4)
 #define NXM_OF_ARP_SPA_W  NXM_HEADER_W(0x0000, 16, 4)
@@ -1606,7 +1614,8 @@ OFP_ASSERT(sizeof(struct nx_action_output_reg) == 24);
  *
  * Format: 128-bit IPv6 address.
  *
- * Masking: Only CIDR masks are allowed, that is, masks that consist of N
+ * Masking: Fully maskable, in Open vSwitch 1.8 and later.  In previous
+ *   versions, only CIDR masks are allowed, that is, masks that consist of N
  *   high-order bits set to 1 and the other 128-N bits set to 0. */
 #define NXM_NX_IPV6_SRC    NXM_HEADER  (0x0001, 19, 16)
 #define NXM_NX_IPV6_SRC_W  NXM_HEADER_W(0x0001, 19, 16)
@@ -1634,8 +1643,11 @@ OFP_ASSERT(sizeof(struct nx_action_output_reg) == 24);
  *
  * Format: 128-bit IPv6 address.
  *
- * Masking: Not maskable. */
-#define NXM_NX_ND_TARGET   NXM_HEADER  (0x0001, 23, 16)
+ * Masking: Fully maskable, in Open vSwitch 1.8 and later.  In previous
+ *   versions, only CIDR masks are allowed, that is, masks that consist of N
+ *   high-order bits set to 1 and the other 128-N bits set to 0. */
+#define NXM_NX_ND_TARGET     NXM_HEADER    (0x0001, 23, 16)
+#define NXM_NX_ND_TARGET_W   NXM_HEADER_W  (0x0001, 23, 16)
 
 /* The source link-layer address option in an IPv6 Neighbor Discovery
  * message.
@@ -1775,10 +1787,8 @@ OFP_ASSERT(sizeof(struct nx_set_flow_format) == 20);
 /* NXT_FLOW_MOD (analogous to OFPT_FLOW_MOD).
  *
  * It is possible to limit flow deletions and modifications to certain
- * cookies by using the NXM_NX_COOKIE and NXM_NX_COOKIE_W matches.  For
- * these commands, the "cookie" field is always ignored.  Flow additions
- * make use of the "cookie" field and ignore any NXM_NX_COOKIE*
- * definitions.
+ * cookies by using the NXM_NX_COOKIE(_W) matches.  The "cookie" field
+ * is used only to add or modify flow cookies.
  */
 struct nx_flow_mod {
     struct nicira_header nxh;

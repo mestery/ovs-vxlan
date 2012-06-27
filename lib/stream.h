@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -82,6 +82,7 @@ bool stream_parse_target_with_default_ports(const char *target,
                                            uint16_t default_tcp_port,
                                            uint16_t default_ssl_port,
                                            struct sockaddr_in *sin);
+int stream_or_pstream_needs_probes(const char *name);
 
 /* Error reporting. */
 

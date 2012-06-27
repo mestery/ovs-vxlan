@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -284,21 +284,35 @@ ovs_retval_to_string(int retval)
  * be called at the beginning of main() with "argv[0]" as the argument
  * to 'argv0'.
  *
+ * 'version' should contain the version of the caller's program.  If 'version'
+ * is the same as the VERSION #define, the caller is assumed to be part of Open
+ * vSwitch.  Otherwise, it is assumed to be an external program linking against
+ * the Open vSwitch libraries.
+ *
  * The 'date' and 'time' arguments should likely be called with
  * "__DATE__" and "__TIME__" to use the time the binary was built.
  * Alternatively, the "set_program_name" macro may be called to do this
  * automatically.
  */
 void
-set_program_name__(const char *argv0, const char *date, const char *time)
+set_program_name__(const char *argv0, const char *version, const char *date,
+                   const char *time)
 {
     const char *slash = strrchr(argv0, '/');
     program_name = slash ? slash + 1 : argv0;
 
     free(program_version);
-    program_version = xasprintf("%s (Open vSwitch) "VERSION"\n"
-                                "Compiled %s %s\n",
-                                program_name, date, time);
+
+    if (!strcmp(version, VERSION)) {
+        program_version = xasprintf("%s (Open vSwitch) "VERSION"\n"
+                                    "Compiled %s %s\n",
+                                    program_name, date, time);
+    } else {
+        program_version = xasprintf("%s %s\n"
+                                    "Open vSwitch Library "VERSION"\n"
+                                    "Compiled %s %s\n",
+                                    program_name, version, date, time);
+    }
 }
 
 /* Returns a pointer to a string describing the program version.  The
@@ -849,6 +863,110 @@ bitwise_zero(void *dst_, unsigned int dst_len, unsigned dst_ofs,
     if (n_bits) {
         *dst &= ~((1 << n_bits) - 1);
     }
+}
+
+/* Sets to 1 all of the 'n_bits' bits starting from bit 'dst_ofs' in 'dst'.
+ * 'dst' is 'dst_len' bytes long.
+ *
+ * If you consider all of 'dst' to be a single unsigned integer in network byte
+ * order, then bit N is the bit with value 2**N.  That is, bit 0 is the bit
+ * with value 1 in dst[dst_len - 1], bit 1 is the bit with value 2, bit 2 is
+ * the bit with value 4, ..., bit 8 is the bit with value 1 in dst[dst_len -
+ * 2], and so on.
+ *
+ * Required invariant:
+ *   dst_ofs + n_bits <= dst_len * 8
+ */
+void
+bitwise_one(void *dst_, unsigned int dst_len, unsigned dst_ofs,
+            unsigned int n_bits)
+{
+    uint8_t *dst = dst_;
+
+    if (!n_bits) {
+        return;
+    }
+
+    dst += dst_len - (dst_ofs / 8 + 1);
+    dst_ofs %= 8;
+
+    if (dst_ofs) {
+        unsigned int chunk = MIN(n_bits, 8 - dst_ofs);
+
+        *dst |= ((1 << chunk) - 1) << dst_ofs;
+
+        n_bits -= chunk;
+        if (!n_bits) {
+            return;
+        }
+
+        dst--;
+    }
+
+    while (n_bits >= 8) {
+        *dst-- = 0xff;
+        n_bits -= 8;
+    }
+
+    if (n_bits) {
+        *dst |= (1 << n_bits) - 1;
+    }
+}
+
+/* Scans the 'n_bits' bits starting from bit 'dst_ofs' in 'dst' for 1-bits.
+ * Returns false if any 1-bits are found, otherwise true.  'dst' is 'dst_len'
+ * bytes long.
+ *
+ * If you consider all of 'dst' to be a single unsigned integer in network byte
+ * order, then bit N is the bit with value 2**N.  That is, bit 0 is the bit
+ * with value 1 in dst[dst_len - 1], bit 1 is the bit with value 2, bit 2 is
+ * the bit with value 4, ..., bit 8 is the bit with value 1 in dst[dst_len -
+ * 2], and so on.
+ *
+ * Required invariant:
+ *   dst_ofs + n_bits <= dst_len * 8
+ */
+bool
+bitwise_is_all_zeros(const void *p_, unsigned int len, unsigned int ofs,
+                     unsigned int n_bits)
+{
+    const uint8_t *p = p_;
+
+    if (!n_bits) {
+        return true;
+    }
+
+    p += len - (ofs / 8 + 1);
+    ofs %= 8;
+
+    if (ofs) {
+        unsigned int chunk = MIN(n_bits, 8 - ofs);
+
+        if (*p & (((1 << chunk) - 1) << ofs)) {
+            return false;
+        }
+
+        n_bits -= chunk;
+        if (!n_bits) {
+            return true;
+        }
+
+        p--;
+    }
+
+    while (n_bits >= 8) {
+        if (*p) {
+            return false;
+        }
+        n_bits -= 8;
+        p--;
+    }
+
+    if (n_bits && *p & ((1 << n_bits) - 1)) {
+        return false;
+    }
+
+    return true;
 }
 
 /* Copies the 'n_bits' low-order bits of 'value' into the 'n_bits' bits

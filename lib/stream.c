@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -487,6 +487,25 @@ pstream_verify_name(const char *name)
 {
     const struct pstream_class *class;
     return pstream_lookup_class(name, &class);
+}
+
+/* Returns 1 if the stream or pstream specified by 'name' needs periodic probes
+ * to verify connectivity.  For [p]streams which need probes, it can take a
+ * long time to notice the connection has been dropped.  Returns 0 if the
+ * stream or pstream does not need probes, and -1 if 'name' is not valid. */
+int
+stream_or_pstream_needs_probes(const char *name)
+{
+    const struct pstream_class *pclass;
+    const struct stream_class *class;
+
+    if (!stream_lookup_class(name, &class)) {
+        return class->needs_probes;
+    } else if (!pstream_lookup_class(name, &pclass)) {
+        return pclass->needs_probes;
+    } else {
+        return -1;
+    }
 }
 
 /* Attempts to start listening for remote stream connections.  'name' is a

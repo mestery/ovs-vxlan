@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -62,6 +62,7 @@ enum ofputil_msg_code {
     OFPUTIL_OFPST_TABLE_REQUEST,
     OFPUTIL_OFPST_PORT_REQUEST,
     OFPUTIL_OFPST_QUEUE_REQUEST,
+    OFPUTIL_OFPST_PORT_DESC_REQUEST,
 
     /* OFPST_* stat replies. */
     OFPUTIL_OFPST_DESC_REPLY,
@@ -70,6 +71,7 @@ enum ofputil_msg_code {
     OFPUTIL_OFPST_PORT_REPLY,
     OFPUTIL_OFPST_TABLE_REPLY,
     OFPUTIL_OFPST_AGGREGATE_REPLY,
+    OFPUTIL_OFPST_PORT_DESC_REPLY,
 
     /* NXT_* messages. */
     OFPUTIL_NXT_ROLE_REQUEST,
@@ -110,8 +112,8 @@ enum ofperr ofputil_check_output_port(uint16_t ofp_port, int max_ports);
 bool ofputil_port_from_string(const char *, uint16_t *port);
 void ofputil_format_port(uint16_t port, struct ds *);
 
-/* Converting OFPFW_NW_SRC_MASK and OFPFW_NW_DST_MASK wildcard bit counts to
- * and from IP bitmasks. */
+/* Converting OFPFW10_NW_SRC_MASK and OFPFW10_NW_DST_MASK wildcard bit counts
+ * to and from IP bitmasks. */
 ovs_be32 ofputil_wcbits_to_netmask(int wcbits);
 int ofputil_netmask_to_wcbits(ovs_be32 netmask);
 
@@ -175,12 +177,21 @@ enum ofputil_protocol ofputil_nx_flow_format_to_protocol(enum nx_flow_format);
 bool ofputil_nx_flow_format_is_valid(enum nx_flow_format);
 const char *ofputil_nx_flow_format_to_string(enum nx_flow_format);
 
-/* Work with OpenFlow 1.0 ofp_match. */
-void ofputil_wildcard_from_openflow(uint32_t ofpfw, struct flow_wildcards *);
-void ofputil_cls_rule_from_match(const struct ofp_match *,
-                                 unsigned int priority, struct cls_rule *);
+/* Work with ofp10_match. */
+void ofputil_wildcard_from_ofpfw10(uint32_t ofpfw, struct flow_wildcards *);
+void ofputil_cls_rule_from_ofp10_match(const struct ofp10_match *,
+                                       unsigned int priority,
+                                       struct cls_rule *);
 void ofputil_normalize_rule(struct cls_rule *);
-void ofputil_cls_rule_to_match(const struct cls_rule *, struct ofp_match *);
+void ofputil_cls_rule_to_ofp10_match(const struct cls_rule *,
+                                     struct ofp10_match *);
+
+/* Work with ofp11_match. */
+enum ofperr ofputil_cls_rule_from_ofp11_match(const struct ofp11_match *,
+                                              unsigned int priority,
+                                              struct cls_rule *);
+void ofputil_cls_rule_to_ofp11_match(const struct cls_rule *,
+                                     struct ofp11_match *);
 
 /* dl_type translation between OpenFlow and 'struct flow' format. */
 ovs_be16 ofputil_dl_type_to_openflow(ovs_be16 flow_dl_type);
@@ -195,11 +206,29 @@ struct ofpbuf *ofputil_make_set_packet_in_format(enum nx_packet_in_format);
 /* NXT_FLOW_MOD_TABLE_ID extension. */
 struct ofpbuf *ofputil_make_flow_mod_table_id(bool flow_mod_table_id);
 
-/* Protocol-independent flow_mod. */
+/* Protocol-independent flow_mod.
+ *
+ * The handling of cookies across multiple versions of OpenFlow is a bit
+ * confusing.  A full description of Open vSwitch's cookie handling is
+ * in the DESIGN file.  The following table shows the expected values of
+ * the cookie-related fields for the different flow_mod commands in
+ * OpenFlow 1.0 ("OF10") and NXM.  "<used>" and "-" indicate a value
+ * that may be populated and an ignored field, respectively.
+ *
+ *               cookie  cookie_mask  new_cookie
+ *               ======  ===========  ==========
+ * OF10 Add        -          0         <used>
+ * OF10 Modify     -          0         <used>
+ * OF10 Delete     -          0           -
+ * NXM Add         -          0         <used>
+ * NXM Modify    <used>     <used>      <used>
+ * NXM Delete    <used>     <used>        -
+ */
 struct ofputil_flow_mod {
     struct cls_rule cr;
-    ovs_be64 cookie;
-    ovs_be64 cookie_mask;
+    ovs_be64 cookie;         /* Cookie bits to match. */
+    ovs_be64 cookie_mask;    /* 1-bit in each 'cookie' bit to match. */
+    ovs_be64 new_cookie;     /* New cookie to install or -1. */
     uint8_t table_id;
     uint16_t command;
     uint16_t idle_timeout;
@@ -305,8 +334,8 @@ struct ofputil_packet_in {
     struct flow_metadata fmd;   /* Metadata at creation time. */
 };
 
-int ofputil_decode_packet_in(struct ofputil_packet_in *,
-                             const struct ofp_header *);
+enum ofperr ofputil_decode_packet_in(struct ofputil_packet_in *,
+                                     const struct ofp_header *);
 struct ofpbuf *ofputil_encode_packet_in(const struct ofputil_packet_in *,
                                         enum nx_packet_in_format);
 
@@ -314,12 +343,15 @@ const char *ofputil_packet_in_reason_to_string(enum ofp_packet_in_reason);
 bool ofputil_packet_in_reason_from_string(const char *,
                                           enum ofp_packet_in_reason *);
 
-/* Abstract packet-out message. */
+/* Abstract packet-out message.
+ *
+ * ofputil_decode_packet_out() will ensure that 'in_port' is a physical port
+ * (OFPP_MAX or less) or one of OFPP_LOCAL, OFPP_NONE, or OFPP_CONTROLLER. */
 struct ofputil_packet_out {
     const void *packet;         /* Packet data, if buffer_id == UINT32_MAX. */
     size_t packet_len;          /* Length of packet data in bytes. */
     uint32_t buffer_id;         /* Buffer id or UINT32_MAX if no buffer. */
-    uint16_t in_port;           /* Packet's input port or OFPP_NONE. */
+    uint16_t in_port;           /* Packet's input port. */
     union ofp_action *actions;  /* Actions. */
     size_t n_actions;           /* Number of elements in 'actions' array. */
 };
@@ -432,15 +464,18 @@ struct ofputil_switch_features {
 enum ofperr ofputil_decode_switch_features(const struct ofp_switch_features *,
                                            struct ofputil_switch_features *,
                                            struct ofpbuf *);
-int ofputil_pull_switch_features_port(struct ofpbuf *,
-                                      struct ofputil_phy_port *);
-size_t ofputil_count_phy_ports(const struct ofp_switch_features *);
 
 struct ofpbuf *ofputil_encode_switch_features(
     const struct ofputil_switch_features *, enum ofputil_protocol,
     ovs_be32 xid);
 void ofputil_put_switch_features_port(const struct ofputil_phy_port *,
                                       struct ofpbuf *);
+bool ofputil_switch_features_ports_trunc(struct ofpbuf *b);
+
+/* phy_port helper functions. */
+int ofputil_pull_phy_port(uint8_t ofp_version, struct ofpbuf *,
+                          struct ofputil_phy_port *);
+size_t ofputil_count_phy_ports(uint8_t ofp_version, struct ofpbuf *);
 
 /* Abstract ofp_port_status. */
 struct ofputil_port_status {
@@ -497,6 +532,10 @@ void ofputil_start_stats_reply(const struct ofp_stats_msg *request,
 struct ofpbuf *ofputil_reserve_stats_reply(size_t len, struct list *);
 void *ofputil_append_stats_reply(size_t len, struct list *);
 
+void ofputil_append_port_desc_stats_reply(uint8_t ofp_version,
+                                          const struct ofputil_phy_port *pp,
+                                          struct list *replies);
+
 const void *ofputil_stats_body(const struct ofp_header *);
 size_t ofputil_stats_body_len(const struct ofp_header *);
 
@@ -507,10 +546,6 @@ struct ofpbuf *make_flow_mod(uint16_t command, const struct cls_rule *,
                              size_t actions_len);
 struct ofpbuf *make_add_flow(const struct cls_rule *, uint32_t buffer_id,
                              uint16_t max_idle, size_t actions_len);
-struct ofpbuf *make_del_flow(const struct cls_rule *);
-struct ofpbuf *make_add_simple_flow(const struct cls_rule *,
-                                    uint32_t buffer_id, uint16_t out_port,
-                                    uint16_t max_idle);
 struct ofpbuf *make_packet_in(uint32_t buffer_id, uint16_t in_port,
                               uint8_t reason,
                               const struct ofpbuf *payload, int max_send_len);
@@ -521,6 +556,7 @@ struct ofpbuf *ofputil_encode_barrier_request(void);
 
 const char *ofputil_frag_handling_to_string(enum ofp_config_flags);
 bool ofputil_frag_handling_from_string(const char *, enum ofp_config_flags *);
+
 
 /* Actions. */
 
