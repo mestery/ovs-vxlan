@@ -91,7 +91,7 @@ int odp_actions_from_string(const char *, const struct simap *port_names,
  *  OVS_KEY_ATTR_ND           28    --     4     32
  *  OVS_KEY_ATTR_TUNNEL       20    --     4     24
  *  -------------------------------------------------
- *  total                                       176
+ *  total                                       1806
  *
  * We include some slack space in case the calculation isn't quite right or we
  * add another field and forget to adjust this value.
