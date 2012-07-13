@@ -462,6 +462,8 @@ cfm_compose_ccm(struct cfm *cfm, struct ofpbuf *packet,
     if (cfm->ccm_interval == 0) {
         assert(cfm->extended);
         ccm->interval_ms_x = htons(cfm->ccm_interval_ms);
+    } else {
+        ccm->interval_ms_x = htons(0);
     }
 
     if (hmap_is_empty(&cfm->remote_mps)) {
@@ -633,7 +635,6 @@ cfm_process_heartbeat(struct cfm *cfm, const struct ofpbuf *p)
             }
 
             if (rmp->seq && ccm_seq != (rmp->seq + 1)) {
-                cfm_fault |= CFM_FAULT_SEQUENCE;
                 VLOG_WARN_RL(&rl, "%s: (mpid %"PRIu64") detected sequence"
                              " numbers which indicate possible connectivity"
                              " problems (previous %"PRIu32") (current %"PRIu32

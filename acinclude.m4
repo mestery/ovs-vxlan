@@ -247,6 +247,7 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_warn_if_lro],
                   [OVS_DEFINE([HAVE_SKB_WARN_LRO])])
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [consume_skb])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_frag_page])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/string.h], [kmemdup], [],
                   [OVS_GREP_IFELSE([$KSRC/include/linux/slab.h], [kmemdup])])
@@ -285,6 +286,17 @@ AC_DEFUN([OVS_CHECK_IF_PACKET],
    if test "$HAVE_IF_PACKET" = yes; then
       AC_DEFINE([HAVE_IF_PACKET], [1],
                 [Define to 1 if net/if_packet.h is available.])
+   fi])
+
+dnl Checks for net/if_dl.h
+AC_DEFUN([OVS_CHECK_IF_DL],
+  [AC_CHECK_HEADER([net/if_dl.h],
+                   [HAVE_IF_DL=yes],
+                   [HAVE_IF_DL=no])
+   AM_CONDITIONAL([HAVE_IF_DL], [test "$HAVE_IF_DL" = yes])
+   if test "$HAVE_IF_DL" = yes; then
+      AC_DEFINE([HAVE_IF_DL], [1],
+                [Define to 1 if net/if_dl.h is available.])
    fi])
 
 dnl Checks for buggy strtok_r.

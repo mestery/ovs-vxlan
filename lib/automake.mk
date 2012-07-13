@@ -96,6 +96,8 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/nx-match.h \
 	lib/odp-util.c \
 	lib/odp-util.h \
+	lib/ofp-actions.c \
+	lib/ofp-actions.h \
 	lib/ofp-errors.c \
 	lib/ofp-errors.h \
 	lib/ofp-parse.c \
@@ -236,6 +238,11 @@ lib_libopenvswitch_a_SOURCES += \
 	lib/rtnetlink-link.h \
 	lib/route-table.c \
 	lib/route-table.h
+endif
+
+if HAVE_IF_DL
+lib_libopenvswitch_a_SOURCES += \
+	lib/route-table-bsd.c
 endif
 
 if HAVE_OPENSSL

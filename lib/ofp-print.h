@@ -22,10 +22,11 @@
 #include <stdint.h>
 #include <stdio.h>
 
-struct ofp_flow_mod;
-struct ofp10_match;
 struct ds;
-union ofp_action;
+struct ofp10_match;
+struct ofp_flow_mod;
+struct ofp_header;
+struct ofputil_flow_stats;
 
 #ifdef  __cplusplus
 extern "C" {
@@ -34,12 +35,14 @@ extern "C" {
 void ofp_print(FILE *, const void *, size_t, int verbosity);
 void ofp_print_packet(FILE *stream, const void *data, size_t len);
 
-void ofp_print_actions(struct ds *, const union ofp_action *, size_t);
 void ofp10_match_print(struct ds *, const struct ofp10_match *, int verbosity);
 
 char *ofp_to_string(const void *, size_t, int verbosity);
 char *ofp10_match_to_string(const struct ofp10_match *, int verbosity);
 char *ofp_packet_to_string(const void *data, size_t len);
+
+void ofp_print_flow_stats(struct ds *, struct ofputil_flow_stats *);
+void ofp_print_version(const struct ofp_header *, struct ds *);
 
 #ifdef  __cplusplus
 }

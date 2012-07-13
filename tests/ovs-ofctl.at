@@ -42,6 +42,7 @@ actions=set_tunnel:0x1234,set_tunnel64:0x9876,set_tunnel:0x123456789
 actions=multipath(eth_src, 50, hrw, 12, 0, NXM_NX_REG0[0..3]),multipath(symmetric_l4, 1024, iter_hash, 5000, 5050, NXM_NX_REG0[0..12])
 table=1,actions=drop
 tun_id=0x1234000056780000/0xffff0000ffff0000,actions=drop
+metadata=0x1234ffff5678ffff/0xffff0000ffff0000,actions=drop
 actions=bundle(eth_src,50,active_backup,ofport,slaves:1)
 actions=bundle(symmetric_l4,60,hrw,ofport,slaves:2,3)
 actions=bundle(symmetric_l4,60,hrw,ofport,slaves:)
@@ -75,6 +76,7 @@ NXT_FLOW_MOD: ADD table:255 actions=set_tunnel:0x1234,set_tunnel64:0x9876,set_tu
 NXT_FLOW_MOD: ADD table:255 actions=multipath(eth_src,50,hrw,12,0,NXM_NX_REG0[0..3]),multipath(symmetric_l4,1024,iter_hash,5000,5050,NXM_NX_REG0[0..12])
 NXT_FLOW_MOD: ADD table:1 actions=drop
 NXT_FLOW_MOD: ADD table:255 tun_id=0x1234000056780000/0xffff0000ffff0000 actions=drop
+NXT_FLOW_MOD: ADD table:255 metadata=0x1234000056780000/0xffff0000ffff0000 actions=drop
 NXT_FLOW_MOD: ADD table:255 actions=bundle(eth_src,50,active_backup,ofport,slaves:1)
 NXT_FLOW_MOD: ADD table:255 actions=bundle(symmetric_l4,60,hrw,ofport,slaves:2,3)
 NXT_FLOW_MOD: ADD table:255 actions=bundle(symmetric_l4,60,hrw,ofport,slaves:)
@@ -361,6 +363,11 @@ NXM_OF_ETH_TYPE(0800) NXM_NX_IPV6_DST(20010db83c4d00010002000300040005)
 NXM_OF_ETH_TYPE(86dd) NXM_NX_IPV6_DST_W(20010db83c4d00010000000000000000/77777777777777777777777777777777)
 NXM_OF_ETH_TYPE(0800) NXM_NX_IPV6_DST_W(20010db83c4d00010000000000000000/ffffffffffffffff0000000000000000)
 
+# IPv6 Flow Label
+NXM_OF_ETH_TYPE(86dd) NXM_NX_IPV6_LABEL(1000000f)
+NXM_NX_IPV6_LABEL(0000000f)
+NXM_OF_ETH_TYPE(86dd) NXM_NX_IPV6_LABEL(0000000f)
+
 # ND target address
 NXM_OF_ETH_TYPE(86dd) NXM_OF_IP_PROTO(3a) NXM_NX_ICMPV6_TYPE(87) NXM_NX_ND_TARGET(20010db83c4d00010002000300040005)
 NXM_OF_ETH_TYPE(86dd) NXM_OF_IP_PROTO(3a) NXM_NX_ICMPV6_TYPE(88) NXM_NX_ND_TARGET(20010db83c4d00010002000300040005)
@@ -571,6 +578,11 @@ NXM_OF_ETH_TYPE(86dd), NXM_NX_IPV6_DST(20010db83c4d00010002000300040005)
 nx_pull_match() returned error OFPBMC_BAD_PREREQ
 NXM_OF_ETH_TYPE(86dd), NXM_NX_IPV6_DST_W(20010530344500010000000000000000/77777777777777777777777777777777)
 nx_pull_match() returned error OFPBMC_BAD_PREREQ
+
+# IPv6 Flow Label
+nx_pull_match() returned error OFPBMC_BAD_VALUE
+nx_pull_match() returned error OFPBMC_BAD_PREREQ
+NXM_OF_ETH_TYPE(86dd), NXM_NX_IPV6_LABEL(0000000f)
 
 # ND target address
 NXM_OF_ETH_TYPE(86dd), NXM_OF_IP_PROTO(3a), NXM_NX_ICMPV6_TYPE(87), NXM_NX_ND_TARGET(20010db83c4d00010002000300040005)
@@ -1108,6 +1120,11 @@ OXM_OF_ETH_TYPE(0800) OXM_OF_IPV6_DST(20010db83c4d00010002000300040005)
 OXM_OF_ETH_TYPE(86dd) OXM_OF_IPV6_DST_W(20010db83c4d00010000000000000000/ffffffffffffffff0000000000000000)
 OXM_OF_ETH_TYPE(0800) OXM_OF_IPV6_DST_W(20010db83c4d00010000000000000000/ffffffffffffffff0000000000000000)
 
+# IPv6 Flow Label
+OXM_OF_ETH_TYPE(86dd) OXM_OF_IPV6_FLABEL(1000000f)
+OXM_OF_IPV6_FLABEL(0000000f)
+OXM_OF_ETH_TYPE(86dd) OXM_OF_IPV6_FLABEL(0000000f)
+
 # ND source hardware address
 OXM_OF_ETH_TYPE(86dd) OXM_OF_IP_PROTO(3a) OXM_OF_ICMPV6_TYPE(87) OXM_OF_IPV6_ND_TARGET(20010db83c4d00010002000300040005) OXM_OF_IPV6_ND_SLL(0002e30f80a4)
 OXM_OF_ETH_TYPE(86dd) OXM_OF_IP_PROTO(3a) OXM_OF_ICMPV6_TYPE(88) OXM_OF_IPV6_ND_TARGET(20010db83c4d00010002000300040005) OXM_OF_IPV6_ND_SLL(0002e30f80a4)
@@ -1244,6 +1261,11 @@ nx_pull_match() returned error OFPBMC_BAD_PREREQ
 OXM_OF_ETH_TYPE(86dd), OXM_OF_IPV6_DST_W(20010db83c4d00010000000000000000/ffffffffffffffff0000000000000000)
 nx_pull_match() returned error OFPBMC_BAD_PREREQ
 
+# IPv6 Flow Label
+nx_pull_match() returned error OFPBMC_BAD_VALUE
+nx_pull_match() returned error OFPBMC_BAD_PREREQ
+OXM_OF_ETH_TYPE(86dd), OXM_OF_IPV6_FLABEL(0000000f)
+
 # ND source hardware address
 OXM_OF_ETH_TYPE(86dd), OXM_OF_IP_PROTO(3a), OXM_OF_ICMPV6_TYPE(87), OXM_OF_IPV6_ND_TARGET(20010db83c4d00010002000300040005), OXM_OF_IPV6_ND_SLL(0002e30f80a4)
 nx_pull_match() returned error OFPBMC_BAD_PREREQ
@@ -1276,10 +1298,13 @@ OXM_OF_IN_PORT(00000001), OXM_OF_ETH_TYPE(0800)
 ])
 AT_CLEANUP
 
-dnl Check that "-F openflow10" rejects a flow_mod with a tun_id, since
-dnl OpenFlow 1.0 doesn't support tunnels.
-AT_SETUP([ovs-ofctl -F option and tun_id])
+dnl Check that "-F openflow10" rejects a flow_mod with unsupported features,
+dnl such as tunnels and metadata.
+AT_SETUP([ovs-ofctl -F option and NXM features])
 AT_CHECK([ovs-ofctl -F openflow10 add-flow dummy tun_id=123,actions=drop],
+  [1], [], [ovs-ofctl: none of the usable flow formats (NXM) is among the allowed flow formats (OpenFlow10)
+])
+AT_CHECK([ovs-ofctl -F openflow10 add-flow dummy metadata=123,actions=drop],
   [1], [], [ovs-ofctl: none of the usable flow formats (NXM) is among the allowed flow formats (OpenFlow10)
 ])
 AT_CLEANUP
@@ -1332,3 +1357,92 @@ ofp_util|INFO|post: @&t@
 OVS_VSWITCHD_STOP
 AT_CLEANUP
 
+dnl Check that --sort and --rsort works with dump-flows
+dnl Default field is 'priority'. Flow entries are displayed based
+dnl on field to sort.
+AT_SETUP([ovs-ofctl dump-flows with sorting])
+OVS_VSWITCHD_START
+AT_KEYWORDS([sort])
+AT_DATA([allflows.txt], [[
+priority=4,in_port=23213 actions=output:42
+priority=5,in_port=1029 actions=output:43
+priority=7,in_port=1029 actions=output:43
+priority=3,in_port=1028 actions=output:44
+priority=1,in_port=1026 actions=output:45
+priority=6,in_port=1027 actions=output:64
+priority=2,in_port=1025 actions=output:47
+priority=8,tcp,tp_src=5 actions=drop
+priority=9,tcp,tp_src=6 actions=drop
+]])
+
+AT_CHECK([ovs-ofctl add-flows br0 allflows.txt
+], [0], [ignore])
+AT_CHECK([ovs-ofctl --sort dump-flows br0 | ofctl_strip], [0], [dnl
+ priority=1,in_port=1026 actions=output:45
+ priority=2,in_port=1025 actions=output:47
+ priority=3,in_port=1028 actions=output:44
+ priority=4,in_port=23213 actions=output:42
+ priority=5,in_port=1029 actions=output:43
+ priority=6,in_port=1027 actions=output:64
+ priority=7,in_port=1029 actions=output:43
+ priority=8,tcp,tp_src=5 actions=drop
+ priority=9,tcp,tp_src=6 actions=drop
+])
+AT_CHECK([ovs-ofctl --rsort dump-flows br0 | ofctl_strip], [0], [dnl
+ priority=9,tcp,tp_src=6 actions=drop
+ priority=8,tcp,tp_src=5 actions=drop
+ priority=7,in_port=1029 actions=output:43
+ priority=6,in_port=1027 actions=output:64
+ priority=5,in_port=1029 actions=output:43
+ priority=4,in_port=23213 actions=output:42
+ priority=3,in_port=1028 actions=output:44
+ priority=2,in_port=1025 actions=output:47
+ priority=1,in_port=1026 actions=output:45
+])
+AT_CHECK([ovs-ofctl --sort=in_port dump-flows br0 | ofctl_strip], [0], [dnl
+ priority=2,in_port=1025 actions=output:47
+ priority=1,in_port=1026 actions=output:45
+ priority=6,in_port=1027 actions=output:64
+ priority=3,in_port=1028 actions=output:44
+ priority=7,in_port=1029 actions=output:43
+ priority=5,in_port=1029 actions=output:43
+ priority=4,in_port=23213 actions=output:42
+ priority=9,tcp,tp_src=6 actions=drop
+ priority=8,tcp,tp_src=5 actions=drop
+])
+AT_CHECK([ovs-ofctl --rsort=in_port dump-flows br0 | ofctl_strip], [0], [dnl
+ priority=4,in_port=23213 actions=output:42
+ priority=7,in_port=1029 actions=output:43
+ priority=5,in_port=1029 actions=output:43
+ priority=3,in_port=1028 actions=output:44
+ priority=6,in_port=1027 actions=output:64
+ priority=1,in_port=1026 actions=output:45
+ priority=2,in_port=1025 actions=output:47
+ priority=9,tcp,tp_src=6 actions=drop
+ priority=8,tcp,tp_src=5 actions=drop
+])
+AT_CHECK([ovs-ofctl --sort=tcp_src dump-flows br0 | ofctl_strip], [0], [dnl
+ priority=8,tcp,tp_src=5 actions=drop
+ priority=9,tcp,tp_src=6 actions=drop
+ priority=7,in_port=1029 actions=output:43
+ priority=6,in_port=1027 actions=output:64
+ priority=5,in_port=1029 actions=output:43
+ priority=4,in_port=23213 actions=output:42
+ priority=3,in_port=1028 actions=output:44
+ priority=2,in_port=1025 actions=output:47
+ priority=1,in_port=1026 actions=output:45
+])
+AT_CHECK(
+  [ovs-ofctl --sort=in_port --sort=tcp_src dump-flows br0 | ofctl_strip], [0],
+  [ priority=2,in_port=1025 actions=output:47
+ priority=1,in_port=1026 actions=output:45
+ priority=6,in_port=1027 actions=output:64
+ priority=3,in_port=1028 actions=output:44
+ priority=7,in_port=1029 actions=output:43
+ priority=5,in_port=1029 actions=output:43
+ priority=4,in_port=23213 actions=output:42
+ priority=8,tcp,tp_src=5 actions=drop
+ priority=9,tcp,tp_src=6 actions=drop
+])
+OVS_VSWITCHD_STOP
+AT_CLEANUP
