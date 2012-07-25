@@ -19,6 +19,7 @@
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,11 +30,13 @@
 #include <unistd.h>
 #include "dirs.h"
 #include "dynamic-string.h"
+#include "ofpbuf.h"
 #include "sat-math.h"
 #include "svec.h"
 #include "timeval.h"
 #include "unixctl.h"
 #include "util.h"
+#include "worker.h"
 
 VLOG_DEFINE_THIS_MODULE(vlog);
 
@@ -84,7 +87,7 @@ static struct facility facilities[VLF_N_FACILITIES] = {
 
 /* VLF_FILE configuration. */
 static char *log_file_name;
-static FILE *log_file;
+static int log_fd = -1;
 
 /* vlog initialized? */
 static bool vlog_inited;
@@ -93,6 +96,8 @@ static void format_log_message(const struct vlog_module *, enum vlog_level,
                                enum vlog_facility, unsigned int msg_num,
                                const char *message, va_list, struct ds *)
     PRINTF_FORMAT(5, 0);
+static void vlog_write_file(struct ds *);
+static void vlog_update_async_log_fd(void);
 
 /* Searches the 'n_names' in 'names'.  Returns the index of a match for
  * 'target', or 'n_names' if no name matches. */
@@ -186,7 +191,7 @@ update_min_level(struct vlog_module *module)
 
     module->min_level = VLL_OFF;
     for (facility = 0; facility < VLF_N_FACILITIES; facility++) {
-        if (log_file || facility != VLF_FILE) {
+        if (log_fd >= 0 || facility != VLF_FILE) {
             enum vlog_level level = module->levels[facility];
             if (level > module->min_level) {
                 module->min_level = level;
@@ -279,10 +284,10 @@ vlog_set_log_file(const char *file_name)
     int error;
 
     /* Close old log file. */
-    if (log_file) {
+    if (log_fd >= 0) {
         VLOG_INFO("closing log file");
-        fclose(log_file);
-        log_file = NULL;
+        close(log_fd);
+        log_fd = -1;
     }
 
     /* Update log file name and free old name.  The ordering is important
@@ -296,13 +301,16 @@ vlog_set_log_file(const char *file_name)
 
     /* Open new log file and update min_levels[] to reflect whether we actually
      * have a log_file. */
-    log_file = fopen(log_file_name, "a");
+    log_fd = open(log_file_name, O_WRONLY | O_CREAT | O_APPEND, 0666);
+    if (log_fd >= 0) {
+        vlog_update_async_log_fd();
+    }
     for (mp = vlog_modules; mp < &vlog_modules[n_vlog_modules]; mp++) {
         update_min_level(*mp);
     }
 
     /* Log success or failure. */
-    if (!log_file) {
+    if (log_fd < 0) {
         VLOG_WARN("failed to open %s for logging: %s",
                   log_file_name, strerror(errno));
         error = errno;
@@ -330,8 +338,8 @@ vlog_reopen_log_file(void)
     /* Skip re-opening if it would be a no-op because the old and new files are
      * the same.  (This avoids writing "closing log file" followed immediately
      * by "opened log file".) */
-    if (log_file
-        && !fstat(fileno(log_file), &old)
+    if (log_fd >= 0
+        && !fstat(log_fd, &old)
         && !stat(log_file_name, &new)
         && old.st_dev == new.st_dev
         && old.st_ino == new.st_ino) {
@@ -653,6 +661,14 @@ format_log_message(const struct vlog_module *module, enum vlog_level level,
         case 'r':
             ds_put_format(s, "%lld", time_msec() - time_boot_msec());
             break;
+        case 't':
+            ds_put_cstr(s, subprogram_name[0] ? subprogram_name : "main");
+            break;
+        case 'T':
+            if (subprogram_name[0]) {
+                ds_put_format(s, "(%s)", subprogram_name);
+            }
+            break;
         default:
             ds_put_char(s, p[-1]);
             break;
@@ -681,7 +697,7 @@ vlog_valist(const struct vlog_module *module, enum vlog_level level,
 {
     bool log_to_console = module->levels[VLF_CONSOLE] >= level;
     bool log_to_syslog = module->levels[VLF_SYSLOG] >= level;
-    bool log_to_file = module->levels[VLF_FILE] >= level && log_file;
+    bool log_to_file = module->levels[VLF_FILE] >= level && log_fd >= 0;
     if (log_to_console || log_to_syslog || log_to_file) {
         int save_errno = errno;
         static unsigned int msg_num;
@@ -717,8 +733,7 @@ vlog_valist(const struct vlog_module *module, enum vlog_level level,
             format_log_message(module, level, VLF_FILE, msg_num,
                                message, args, &s);
             ds_put_char(&s, '\n');
-            fputs(ds_cstr(&s), log_file);
-            fflush(log_file);
+            vlog_write_file(&s);
         }
 
         ds_destroy(&s);
@@ -737,6 +752,12 @@ vlog(const struct vlog_module *module, enum vlog_level level,
     va_end(args);
 }
 
+/* Logs 'message' to 'module' at maximum verbosity, then exits with a failure
+ * exit code.  Always writes the message to stderr, even if the console
+ * facility is disabled.
+ *
+ * Choose this function instead of vlog_abort_valist() if the daemon monitoring
+ * facility shouldn't automatically restart the current daemon.  */
 void
 vlog_fatal_valist(const struct vlog_module *module_,
                   const char *message, va_list args)
@@ -751,6 +772,12 @@ vlog_fatal_valist(const struct vlog_module *module_,
     ovs_fatal_valist(0, message, args);
 }
 
+/* Logs 'message' to 'module' at maximum verbosity, then exits with a failure
+ * exit code.  Always writes the message to stderr, even if the console
+ * facility is disabled.
+ *
+ * Choose this function instead of vlog_abort() if the daemon monitoring
+ * facility shouldn't automatically restart the current daemon.  */
 void
 vlog_fatal(const struct vlog_module *module, const char *message, ...)
 {
@@ -758,6 +785,40 @@ vlog_fatal(const struct vlog_module *module, const char *message, ...)
 
     va_start(args, message);
     vlog_fatal_valist(module, message, args);
+    va_end(args);
+}
+
+/* Logs 'message' to 'module' at maximum verbosity, then calls abort().  Always
+ * writes the message to stderr, even if the console facility is disabled.
+ *
+ * Choose this function instead of vlog_fatal_valist() if the daemon monitoring
+ * facility should automatically restart the current daemon.  */
+void
+vlog_abort_valist(const struct vlog_module *module_,
+                  const char *message, va_list args)
+{
+    struct vlog_module *module = (struct vlog_module *) module_;
+
+    /* Don't log this message to the console to avoid redundancy with the
+     * message written by the later ovs_abort_valist(). */
+    module->levels[VLF_CONSOLE] = VLL_OFF;
+
+    vlog_valist(module, VLL_EMER, message, args);
+    ovs_abort_valist(0, message, args);
+}
+
+/* Logs 'message' to 'module' at maximum verbosity, then calls abort().  Always
+ * writes the message to stderr, even if the console facility is disabled.
+ *
+ * Choose this function instead of vlog_fatal() if the daemon monitoring
+ * facility should automatically restart the current daemon.  */
+void
+vlog_abort(const struct vlog_module *module, const char *message, ...)
+{
+    va_list args;
+
+    va_start(args, message);
+    vlog_abort_valist(module, message, args);
     va_end(args);
 }
 
@@ -816,4 +877,47 @@ vlog_usage(void)
            "  --log-file[=FILE]       enable logging to specified FILE\n"
            "                          (default: %s/%s.log)\n",
            ovs_logdir(), program_name);
+}
+
+static bool vlog_async_inited = false;
+
+static worker_request_func vlog_async_write_request_cb;
+
+static void
+vlog_write_file(struct ds *s)
+{
+    if (worker_is_running()) {
+        worker_request(s->string, s->length,
+                       &log_fd, vlog_async_inited ? 0 : 1,
+                       vlog_async_write_request_cb, NULL, NULL);
+        vlog_async_inited = true;
+    } else {
+        write(log_fd, s->string, s->length);
+    }
+}
+
+static void
+vlog_update_async_log_fd(void)
+{
+    if (worker_is_running()) {
+        worker_request(NULL, 0, &log_fd, 1, vlog_async_write_request_cb,
+                       NULL, NULL);
+        vlog_async_inited = true;
+    }
+}
+
+static void
+vlog_async_write_request_cb(struct ofpbuf *request,
+                            const int *fd, size_t n_fds)
+{
+    if (n_fds > 0) {
+        if (log_fd >= 0) {
+            close(log_fd);
+        }
+        log_fd = *fd;
+    }
+
+    if (request->size > 0) {
+        write(log_fd, request->data, request->size);
+    }
 }

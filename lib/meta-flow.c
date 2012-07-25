@@ -157,20 +157,38 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         NXM_OF_VLAN_TCI, "NXM_OF_VLAN_TCI",
         NXM_OF_VLAN_TCI, "NXM_OF_VLAN_TCI",
     }, {
-        MFF_VLAN_VID, "dl_vlan", NULL,
+        MFF_DL_VLAN, "dl_vlan", NULL,
         sizeof(ovs_be16), 12,
         MFM_NONE, 0,
+        MFS_DECIMAL,
+        MFP_NONE,
+        true,
+        0, NULL,
+        0, NULL,
+    }, {
+        MFF_VLAN_VID, "vlan_vid", NULL,
+        sizeof(ovs_be16), 12,
+        MFM_FULLY, 0,
         MFS_DECIMAL,
         MFP_NONE,
         true,
         OXM_OF_VLAN_VID, "OXM_OF_VLAN_VID",
         OXM_OF_VLAN_VID, "OXM_OF_VLAN_VID",
     }, {
-        MFF_VLAN_PCP, "dl_vlan_pcp", NULL,
+        MFF_DL_VLAN_PCP, "dl_vlan_pcp", NULL,
         1, 3,
         MFM_NONE, 0,
         MFS_DECIMAL,
         MFP_NONE,
+        true,
+        0, NULL,
+        0, NULL,
+    }, {
+        MFF_VLAN_PCP, "vlan_pcp", NULL,
+        1, 3,
+        MFM_NONE, 0,
+        MFS_DECIMAL,
+        MFP_VLAN_VID,
         true,
         OXM_OF_VLAN_PCP, "OXM_OF_VLAN_PCP",
         OXM_OF_VLAN_PCP, "OXM_OF_VLAN_PCP",
@@ -222,7 +240,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
     {
         MFF_IPV6_LABEL, "ipv6_label", NULL,
         4, 20,
-        MFM_NONE, FWW_IPV6_LABEL,
+        MFM_FULLY, 0,
         MFS_HEXADECIMAL,
         MFP_IPV6,
         false,
@@ -307,7 +325,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
     }, {
         MFF_ARP_SHA, "arp_sha", NULL,
         MF_FIELD_SIZES(mac),
-        MFM_NONE, FWW_ARP_SHA,
+        MFM_FULLY, 0,
         MFS_ETHERNET,
         MFP_ARP,
         false,
@@ -316,7 +334,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
     }, {
         MFF_ARP_THA, "arp_tha", NULL,
         MF_FIELD_SIZES(mac),
-        MFM_NONE, FWW_ARP_THA,
+        MFM_FULLY, 0,
         MFS_ETHERNET,
         MFP_ARP,
         false,
@@ -424,7 +442,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
     }, {
         MFF_ND_SLL, "nd_sll", NULL,
         MF_FIELD_SIZES(mac),
-        MFM_NONE, FWW_ARP_SHA,
+        MFM_FULLY, 0,
         MFS_ETHERNET,
         MFP_ND_SOLICIT,
         false,
@@ -433,7 +451,7 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
     }, {
         MFF_ND_TLL, "nd_tll", NULL,
         MF_FIELD_SIZES(mac),
-        MFM_NONE, FWW_ARP_THA,
+        MFM_FULLY, 0,
         MFS_ETHERNET,
         MFP_ND_ADVERT,
         false,
@@ -561,12 +579,7 @@ mf_is_all_wild(const struct mf_field *mf, const struct flow_wildcards *wc)
     case MFF_IP_DSCP:
     case MFF_IP_ECN:
     case MFF_IP_TTL:
-    case MFF_IPV6_LABEL:
     case MFF_ARP_OP:
-    case MFF_ARP_SHA:
-    case MFF_ARP_THA:
-    case MFF_ND_SLL:
-    case MFF_ND_TLL:
         assert(mf->fww_bit != 0);
         return (wc->wildcards & mf->fww_bit) != 0;
 
@@ -583,10 +596,21 @@ mf_is_all_wild(const struct mf_field *mf, const struct flow_wildcards *wc)
     case MFF_ETH_DST:
         return eth_addr_is_zero(wc->dl_dst_mask);
 
+    case MFF_ARP_SHA:
+    case MFF_ND_SLL:
+        return eth_addr_is_zero(wc->arp_sha_mask);
+
+    case MFF_ARP_THA:
+    case MFF_ND_TLL:
+        return eth_addr_is_zero(wc->arp_tha_mask);
+
     case MFF_VLAN_TCI:
         return !wc->vlan_tci_mask;
-    case MFF_VLAN_VID:
+    case MFF_DL_VLAN:
         return !(wc->vlan_tci_mask & htons(VLAN_VID_MASK));
+    case MFF_VLAN_VID:
+        return !(wc->vlan_tci_mask & htons(VLAN_VID_MASK | VLAN_CFI));
+    case MFF_DL_VLAN_PCP:
     case MFF_VLAN_PCP:
         return !(wc->vlan_tci_mask & htons(VLAN_PCP_MASK));
 
@@ -599,6 +623,9 @@ mf_is_all_wild(const struct mf_field *mf, const struct flow_wildcards *wc)
         return ipv6_mask_is_any(&wc->ipv6_src_mask);
     case MFF_IPV6_DST:
         return ipv6_mask_is_any(&wc->ipv6_dst_mask);
+
+    case MFF_IPV6_LABEL:
+        return !wc->ipv6_label_mask;
 
     case MFF_ND_TARGET:
         return ipv6_mask_is_any(&wc->nd_target_mask);
@@ -645,12 +672,7 @@ mf_get_mask(const struct mf_field *mf, const struct flow_wildcards *wc,
     case MFF_IP_DSCP:
     case MFF_IP_ECN:
     case MFF_IP_TTL:
-    case MFF_IPV6_LABEL:
     case MFF_ARP_OP:
-    case MFF_ARP_SHA:
-    case MFF_ARP_THA:
-    case MFF_ND_SLL:
-    case MFF_ND_TLL:
         assert(mf->fww_bit != 0);
         memset(mask, wc->wildcards & mf->fww_bit ? 0x00 : 0xff, mf->n_bytes);
         break;
@@ -677,9 +699,13 @@ mf_get_mask(const struct mf_field *mf, const struct flow_wildcards *wc,
     case MFF_VLAN_TCI:
         mask->be16 = wc->vlan_tci_mask;
         break;
-    case MFF_VLAN_VID:
+    case MFF_DL_VLAN:
         mask->be16 = wc->vlan_tci_mask & htons(VLAN_VID_MASK);
         break;
+    case MFF_VLAN_VID:
+        mask->be16 = wc->vlan_tci_mask & htons(VLAN_VID_MASK | VLAN_CFI);
+        break;
+    case MFF_DL_VLAN_PCP:
     case MFF_VLAN_PCP:
         mask->u8 = vlan_tci_to_pcp(wc->vlan_tci_mask);
         break;
@@ -697,6 +723,9 @@ mf_get_mask(const struct mf_field *mf, const struct flow_wildcards *wc,
     case MFF_IPV6_DST:
         mask->ipv6 = wc->ipv6_dst_mask;
         break;
+    case MFF_IPV6_LABEL:
+        mask->be32 = wc->ipv6_label_mask;
+        break;
 
     case MFF_ND_TARGET:
         mask->ipv6 = wc->nd_target_mask;
@@ -711,6 +740,14 @@ mf_get_mask(const struct mf_field *mf, const struct flow_wildcards *wc,
         break;
     case MFF_ARP_TPA:
         mask->be32 = wc->nw_dst_mask;
+        break;
+    case MFF_ARP_SHA:
+    case MFF_ND_SLL:
+        memcpy(mask->mac, wc->arp_sha_mask, ETH_ADDR_LEN);
+        break;
+    case MFF_ARP_THA:
+    case MFF_ND_TLL:
+        memcpy(mask->mac, wc->arp_tha_mask, ETH_ADDR_LEN);
         break;
 
     case MFF_TCP_SRC:
@@ -789,6 +826,8 @@ mf_are_prereqs_ok(const struct mf_field *mf, const struct flow *flow)
         return flow->dl_type == htons(ETH_TYPE_IP);
     case MFP_IPV6:
         return flow->dl_type == htons(ETH_TYPE_IPV6);
+    case MFP_VLAN_VID:
+        return (flow->vlan_tci & htons(VLAN_CFI)) != 0;
     case MFP_IP_ANY:
         return is_ip_any(flow);
 
@@ -874,9 +913,12 @@ mf_is_value_valid(const struct mf_field *mf, const union mf_value *value)
     case MFF_ARP_OP:
         return !(value->be16 & htons(0xff00));
 
-    case MFF_VLAN_VID:
+    case MFF_DL_VLAN:
         return !(value->be16 & htons(VLAN_CFI | VLAN_PCP_MASK));
+    case MFF_VLAN_VID:
+        return !(value->be16 & htons(VLAN_PCP_MASK));
 
+    case MFF_DL_VLAN_PCP:
     case MFF_VLAN_PCP:
         return !(value->u8 & ~(VLAN_PCP_MASK >> VLAN_PCP_SHIFT));
 
@@ -927,10 +969,14 @@ mf_get_value(const struct mf_field *mf, const struct flow *flow,
         value->be16 = flow->vlan_tci;
         break;
 
-    case MFF_VLAN_VID:
+    case MFF_DL_VLAN:
         value->be16 = flow->vlan_tci & htons(VLAN_VID_MASK);
         break;
+    case MFF_VLAN_VID:
+        value->be16 = flow->vlan_tci & htons(VLAN_VID_MASK | VLAN_CFI);
+        break;
 
+    case MFF_DL_VLAN_PCP:
     case MFF_VLAN_PCP:
         value->u8 = vlan_tci_to_pcp(flow->vlan_tci);
         break;
@@ -1066,10 +1112,14 @@ mf_set_value(const struct mf_field *mf,
         cls_rule_set_dl_tci(rule, value->be16);
         break;
 
-    case MFF_VLAN_VID:
+    case MFF_DL_VLAN:
         cls_rule_set_dl_vlan(rule, value->be16);
         break;
+    case MFF_VLAN_VID:
+        cls_rule_set_vlan_vid(rule, value->be16);
+        break;
 
+    case MFF_DL_VLAN_PCP:
     case MFF_VLAN_PCP:
         cls_rule_set_dl_vlan_pcp(rule, value->u8);
         break;
@@ -1205,10 +1255,14 @@ mf_set_flow_value(const struct mf_field *mf,
         flow->vlan_tci = value->be16;
         break;
 
+    case MFF_DL_VLAN:
+        flow_set_dl_vlan(flow, value->be16);
+        break;
     case MFF_VLAN_VID:
         flow_set_vlan_vid(flow, value->be16);
         break;
 
+    case MFF_DL_VLAN_PCP:
     case MFF_VLAN_PCP:
         flow_set_vlan_pcp(flow, value->u8);
         break;
@@ -1362,10 +1416,12 @@ mf_set_wild(const struct mf_field *mf, struct cls_rule *rule)
         cls_rule_set_dl_tci_masked(rule, htons(0), htons(0));
         break;
 
+    case MFF_DL_VLAN:
     case MFF_VLAN_VID:
         cls_rule_set_any_vid(rule);
         break;
 
+    case MFF_DL_VLAN_PCP:
     case MFF_VLAN_PCP:
         cls_rule_set_any_pcp(rule);
         break;
@@ -1391,7 +1447,7 @@ mf_set_wild(const struct mf_field *mf, struct cls_rule *rule)
         break;
 
     case MFF_IPV6_LABEL:
-        rule->wc.wildcards |= FWW_IPV6_LABEL;
+        rule->wc.ipv6_label_mask = 0;
         rule->flow.ipv6_label = 0;
         break;
 
@@ -1427,14 +1483,14 @@ mf_set_wild(const struct mf_field *mf, struct cls_rule *rule)
 
     case MFF_ARP_SHA:
     case MFF_ND_SLL:
-        rule->wc.wildcards |= FWW_ARP_SHA;
-        memset(rule->flow.arp_sha, 0, sizeof rule->flow.arp_sha);
+        memset(rule->flow.arp_sha, 0, ETH_ADDR_LEN);
+        memset(rule->wc.arp_sha_mask, 0, ETH_ADDR_LEN);
         break;
 
     case MFF_ARP_THA:
     case MFF_ND_TLL:
-        rule->wc.wildcards |= FWW_ARP_THA;
-        memset(rule->flow.arp_tha, 0, sizeof rule->flow.arp_tha);
+        memset(rule->flow.arp_tha, 0, ETH_ADDR_LEN);
+        memset(rule->wc.arp_tha_mask, 0, ETH_ADDR_LEN);
         break;
 
     case MFF_TCP_SRC:
@@ -1491,22 +1547,18 @@ mf_set(const struct mf_field *mf,
     switch (mf->id) {
     case MFF_IN_PORT:
     case MFF_ETH_TYPE:
-    case MFF_VLAN_VID:
+    case MFF_DL_VLAN:
+    case MFF_DL_VLAN_PCP:
     case MFF_VLAN_PCP:
-    case MFF_IPV6_LABEL:
     case MFF_IP_PROTO:
     case MFF_IP_TTL:
     case MFF_IP_DSCP:
     case MFF_IP_ECN:
     case MFF_ARP_OP:
-    case MFF_ARP_SHA:
-    case MFF_ARP_THA:
     case MFF_ICMPV4_TYPE:
     case MFF_ICMPV4_CODE:
     case MFF_ICMPV6_TYPE:
     case MFF_ICMPV6_CODE:
-    case MFF_ND_SLL:
-    case MFF_ND_TLL:
         NOT_REACHED();
 
     case MFF_TUN_ID:
@@ -1529,8 +1581,22 @@ mf_set(const struct mf_field *mf,
         cls_rule_set_dl_src_masked(rule, value->mac, mask->mac);
         break;
 
+    case MFF_ARP_SHA:
+    case MFF_ND_SLL:
+        cls_rule_set_arp_sha_masked(rule, value->mac, mask->mac);
+        break;
+
+    case MFF_ARP_THA:
+    case MFF_ND_TLL:
+        cls_rule_set_arp_tha_masked(rule, value->mac, mask->mac);
+        break;
+
     case MFF_VLAN_TCI:
         cls_rule_set_dl_tci_masked(rule, value->be16, mask->be16);
+        break;
+
+    case MFF_VLAN_VID:
+        cls_rule_set_vlan_vid_masked(rule, value->be16, mask->be16);
         break;
 
     case MFF_IPV4_SRC:
@@ -1547,6 +1613,14 @@ mf_set(const struct mf_field *mf,
 
     case MFF_IPV6_DST:
         cls_rule_set_ipv6_dst_masked(rule, &value->ipv6, &mask->ipv6);
+        break;
+
+    case MFF_IPV6_LABEL:
+        if ((mask->be32 & htonl(IPV6_LABEL_MASK)) == htonl(IPV6_LABEL_MASK)) {
+            mf_set_value(mf, value, rule);
+        } else {
+            cls_rule_set_ipv6_label_masked(rule, value->be32, mask->be32);
+        }
         break;
 
     case MFF_ND_TARGET:
@@ -1698,10 +1772,14 @@ mf_random_value(const struct mf_field *mf, union mf_value *value)
         value->be16 &= htons(0xff);
         break;
 
-    case MFF_VLAN_VID:
+    case MFF_DL_VLAN:
         value->be16 &= htons(VLAN_VID_MASK);
         break;
+    case MFF_VLAN_VID:
+        value->be16 &= htons(VLAN_VID_MASK | VLAN_CFI);
+        break;
 
+    case MFF_DL_VLAN_PCP:
     case MFF_VLAN_PCP:
         value->u8 &= 0x07;
         break;

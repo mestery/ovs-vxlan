@@ -17,6 +17,8 @@
 
 #include "hmap.h"
 
+struct json;
+
 /* A map from string to string. */
 struct smap {
     struct hmap map;           /* Contains "struct smap_node"s. */
@@ -46,7 +48,8 @@ void smap_add_format(struct smap *, const char *key, const char *, ...)
 void smap_replace(struct smap *, const char *, const char *);
 
 void smap_remove(struct smap *, const char *);
-void smap_remove_node(struct smap *smap, struct smap_node *);
+void smap_remove_node(struct smap *, struct smap_node *);
+void smap_steal(struct smap *, struct smap_node *, char **keyp, char **valuep);
 void smap_clear(struct smap *);
 
 const char *smap_get(const struct smap *, const char *);
@@ -59,5 +62,8 @@ size_t smap_count(const struct smap *);
 
 void smap_clone(struct smap *dst, const struct smap *src);
 const struct smap_node **smap_sort(const struct smap *);
+
+void smap_from_json(struct smap *, const struct json *);
+struct json *smap_to_json(const struct smap *);
 
 #endif /* smap.h */

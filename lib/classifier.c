@@ -160,52 +160,72 @@ cls_rule_set_dl_type(struct cls_rule *rule, ovs_be16 dl_type)
     rule->flow.dl_type = dl_type;
 }
 
+/* Modifies 'value_src' so that the Ethernet address must match
+ * 'value_dst' exactly. 'mask_dst' is set to all 1s */
+static void
+cls_rule_set_eth(const uint8_t value_src[ETH_ADDR_LEN],
+                 uint8_t value_dst[ETH_ADDR_LEN],
+                 uint8_t mask_dst[ETH_ADDR_LEN])
+{
+    memcpy(value_dst, value_src, ETH_ADDR_LEN);
+    memset(mask_dst, 0xff, ETH_ADDR_LEN);
+}
+
+/* Modifies 'value_src' so that the Ethernet address must match
+ * 'value_src' after each byte is ANDed with the appropriate byte in
+ * 'mask_src'. 'mask_dst' is set to 'mask_src' */
+static void
+cls_rule_set_eth_masked(const uint8_t value_src[ETH_ADDR_LEN],
+                        const uint8_t mask_src[ETH_ADDR_LEN],
+                        uint8_t value_dst[ETH_ADDR_LEN],
+                        uint8_t mask_dst[ETH_ADDR_LEN])
+{
+    size_t i;
+
+    for (i = 0; i < ETH_ADDR_LEN; i++) {
+        value_dst[i] = value_src[i] & mask_src[i];
+        mask_dst[i] = mask_src[i];
+    }
+}
+
+/* Modifies 'rule' so that the source Ethernet address
+ * must match 'dl_src' exactly. */
 void
 cls_rule_set_dl_src(struct cls_rule *rule, const uint8_t dl_src[ETH_ADDR_LEN])
 {
-    memcpy(rule->flow.dl_src, dl_src, ETH_ADDR_LEN);
-    memset(rule->wc.dl_src_mask, 0xff, ETH_ADDR_LEN);
+    cls_rule_set_eth(dl_src, rule->flow.dl_src, rule->wc.dl_src_mask);
 }
 
-/* Modifies 'rule' so that the Ethernet address must match 'dl_src' after each
- * byte is ANDed with the appropriate byte in 'mask'. */
+/* Modifies 'rule' so that the source Ethernet address
+ * must match 'dl_src' after each byte is ANDed with
+ * the appropriate byte in 'mask'. */
 void
 cls_rule_set_dl_src_masked(struct cls_rule *rule,
                            const uint8_t dl_src[ETH_ADDR_LEN],
                            const uint8_t mask[ETH_ADDR_LEN])
 {
-    size_t i;
-
-    for (i = 0; i < ETH_ADDR_LEN; i++) {
-        rule->flow.dl_src[i] = dl_src[i] & mask[i];
-        rule->wc.dl_src_mask[i] = mask[i];
-    }
+    cls_rule_set_eth_masked(dl_src, mask,
+                            rule->flow.dl_src, rule->wc.dl_src_mask);
 }
 
-/* Modifies 'rule' so that the Ethernet address must match 'dl_dst' exactly. */
+/* Modifies 'rule' so that the destination Ethernet address
+ * must match 'dl_dst' exactly. */
 void
 cls_rule_set_dl_dst(struct cls_rule *rule, const uint8_t dl_dst[ETH_ADDR_LEN])
 {
-    memcpy(rule->flow.dl_dst, dl_dst, ETH_ADDR_LEN);
-    memset(rule->wc.dl_dst_mask, 0xff, ETH_ADDR_LEN);
+    cls_rule_set_eth(dl_dst, rule->flow.dl_dst, rule->wc.dl_dst_mask);
 }
 
-/* Modifies 'rule' so that the Ethernet address must match 'dl_dst' after each
- * byte is ANDed with the appropriate byte in 'mask'.
- *
- * This function will assert-fail if 'mask' is invalid.  Only 'mask' values
- * accepted by flow_wildcards_is_dl_dst_mask_valid() are allowed. */
+/* Modifies 'rule' so that the destination Ethernet address
+ * must match 'dl_src' after each byte is ANDed with
+ * the appropriate byte in 'mask'. */
 void
 cls_rule_set_dl_dst_masked(struct cls_rule *rule,
                            const uint8_t dl_dst[ETH_ADDR_LEN],
                            const uint8_t mask[ETH_ADDR_LEN])
 {
-    size_t i;
-
-    for (i = 0; i < ETH_ADDR_LEN; i++) {
-        rule->flow.dl_dst[i] = dl_dst[i] & mask[i];
-        rule->wc.dl_dst_mask[i] = mask[i];
-    }
+    cls_rule_set_eth_masked(dl_dst, mask,
+                            rule->flow.dl_dst, rule->wc.dl_dst_mask);
 }
 
 void
@@ -246,12 +266,37 @@ cls_rule_set_any_vid(struct cls_rule *rule)
 void
 cls_rule_set_dl_vlan(struct cls_rule *rule, ovs_be16 dl_vlan)
 {
-    flow_set_vlan_vid(&rule->flow, dl_vlan);
+    flow_set_dl_vlan(&rule->flow, dl_vlan);
     if (dl_vlan == htons(OFP10_VLAN_NONE)) {
         rule->wc.vlan_tci_mask = htons(UINT16_MAX);
     } else {
         rule->wc.vlan_tci_mask |= htons(VLAN_VID_MASK | VLAN_CFI);
     }
+}
+
+/* Sets the VLAN VID that 'flow' matches to 'vid', which is interpreted as an
+ * OpenFlow 1.2 "vlan_vid" value, that is, the low 13 bits of 'vlan_tci' (VID
+ * plus CFI). */
+void
+cls_rule_set_vlan_vid(struct cls_rule *rule, ovs_be16 vid)
+{
+    cls_rule_set_vlan_vid_masked(rule, vid, htons(VLAN_VID_MASK | VLAN_CFI));
+}
+
+
+/* Sets the VLAN VID that 'flow' matches to 'vid', which is interpreted as an
+ * OpenFlow 1.2 "vlan_vid" value, that is, the low 13 bits of 'vlan_tci' (VID
+ * plus CFI), with the corresponding 'mask'. */
+void
+cls_rule_set_vlan_vid_masked(struct cls_rule *rule,
+                             ovs_be16 vid, ovs_be16 mask)
+{
+    ovs_be16 pcp_mask = htons(VLAN_PCP_MASK);
+    ovs_be16 vid_mask = htons(VLAN_VID_MASK | VLAN_CFI);
+
+    mask &= vid_mask;
+    flow_set_vlan_vid(&rule->flow, vid & mask);
+    rule->wc.vlan_tci_mask = mask | (rule->wc.vlan_tci_mask & pcp_mask);
 }
 
 /* Modifies 'rule' so that the VLAN PCP is wildcarded.  If the VID is already
@@ -392,15 +437,31 @@ cls_rule_set_icmp_code(struct cls_rule *rule, uint8_t icmp_code)
 void
 cls_rule_set_arp_sha(struct cls_rule *rule, const uint8_t sha[ETH_ADDR_LEN])
 {
-    rule->wc.wildcards &= ~FWW_ARP_SHA;
-    memcpy(rule->flow.arp_sha, sha, ETH_ADDR_LEN);
+    cls_rule_set_eth(sha, rule->flow.arp_sha, rule->wc.arp_sha_mask);
+}
+
+void
+cls_rule_set_arp_sha_masked(struct cls_rule *rule,
+                           const uint8_t arp_sha[ETH_ADDR_LEN],
+                           const uint8_t mask[ETH_ADDR_LEN])
+{
+    cls_rule_set_eth_masked(arp_sha, mask,
+                            rule->flow.arp_sha, rule->wc.arp_sha_mask);
 }
 
 void
 cls_rule_set_arp_tha(struct cls_rule *rule, const uint8_t tha[ETH_ADDR_LEN])
 {
-    rule->wc.wildcards &= ~FWW_ARP_THA;
-    memcpy(rule->flow.arp_tha, tha, ETH_ADDR_LEN);
+    cls_rule_set_eth(tha, rule->flow.arp_tha, rule->wc.arp_tha_mask);
+}
+
+void
+cls_rule_set_arp_tha_masked(struct cls_rule *rule,
+                           const uint8_t arp_tha[ETH_ADDR_LEN],
+                           const uint8_t mask[ETH_ADDR_LEN])
+{
+    cls_rule_set_eth_masked(arp_tha, mask,
+                            rule->flow.arp_tha, rule->wc.arp_tha_mask);
 }
 
 void
@@ -436,8 +497,15 @@ cls_rule_set_ipv6_dst_masked(struct cls_rule *rule, const struct in6_addr *dst,
 void
 cls_rule_set_ipv6_label(struct cls_rule *rule, ovs_be32 ipv6_label)
 {
-    rule->wc.wildcards &= ~FWW_IPV6_LABEL;
-    rule->flow.ipv6_label = ipv6_label;
+    cls_rule_set_ipv6_label_masked(rule, ipv6_label, htonl(UINT32_MAX));
+}
+
+void
+cls_rule_set_ipv6_label_masked(struct cls_rule *rule, ovs_be32 ipv6_label,
+                               ovs_be32 mask)
+{
+    rule->flow.ipv6_label = ipv6_label & mask;
+    rule->wc.ipv6_label_mask = mask;
 }
 
 void
@@ -539,7 +607,7 @@ cls_rule_format(const struct cls_rule *rule, struct ds *s)
 
     int i;
 
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 12);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 14);
 
     if (rule->priority != OFP_DEFAULT_PRIORITY) {
         ds_put_format(s, "priority=%d,", rule->priority);
@@ -655,8 +723,15 @@ cls_rule_format(const struct cls_rule *rule, struct ds *s)
     if (f->dl_type == htons(ETH_TYPE_IPV6)) {
         format_ipv6_netmask(s, "ipv6_src", &f->ipv6_src, &wc->ipv6_src_mask);
         format_ipv6_netmask(s, "ipv6_dst", &f->ipv6_dst, &wc->ipv6_dst_mask);
-        if (!(w & FWW_IPV6_LABEL)) {
-            ds_put_format(s, "ipv6_label=0x%05"PRIx32",", ntohl(f->ipv6_label));
+        if (wc->ipv6_label_mask) {
+            if (wc->ipv6_label_mask == htonl(UINT32_MAX)) {
+                ds_put_format(s, "ipv6_label=0x%05"PRIx32",",
+                              ntohl(f->ipv6_label));
+            } else {
+                ds_put_format(s, "ipv6_label=0x%05"PRIx32"/0x%05"PRIx32",",
+                              ntohl(f->ipv6_label),
+                              ntohl(wc->ipv6_label_mask));
+            }
         }
     } else {
         format_ip_netmask(s, "nw_src", f->nw_src, wc->nw_src_mask);
@@ -670,14 +745,8 @@ cls_rule_format(const struct cls_rule *rule, struct ds *s)
         }
     }
     if (f->dl_type == htons(ETH_TYPE_ARP)) {
-        if (!(w & FWW_ARP_SHA)) {
-            ds_put_format(s, "arp_sha="ETH_ADDR_FMT",",
-                    ETH_ADDR_ARGS(f->arp_sha));
-        }
-        if (!(w & FWW_ARP_THA)) {
-            ds_put_format(s, "arp_tha="ETH_ADDR_FMT",",
-                    ETH_ADDR_ARGS(f->arp_tha));
-        }
+        format_eth_masked(s, "arp_sha", f->arp_sha, wc->arp_sha_mask);
+        format_eth_masked(s, "arp_tha", f->arp_tha, wc->arp_tha_mask);
     }
     if (!(w & FWW_NW_DSCP)) {
         ds_put_format(s, "nw_tos=%"PRIu8",", f->nw_tos & IP_DSCP_MASK);
@@ -714,14 +783,8 @@ cls_rule_format(const struct cls_rule *rule, struct ds *s)
         format_be16_masked(s, "icmp_code", f->tp_dst, wc->tp_dst_mask);
         format_ipv6_netmask(s, "nd_target", &f->nd_target,
                             &wc->nd_target_mask);
-        if (!(w & FWW_ARP_SHA)) {
-            ds_put_format(s, "nd_sll="ETH_ADDR_FMT",",
-                    ETH_ADDR_ARGS(f->arp_sha));
-        }
-        if (!(w & FWW_ARP_THA)) {
-            ds_put_format(s, "nd_tll="ETH_ADDR_FMT",",
-                    ETH_ADDR_ARGS(f->arp_tha));
-        }
+        format_eth_masked(s, "nd_sll", f->arp_sha, wc->arp_sha_mask);
+        format_eth_masked(s, "nd_tll", f->arp_tha, wc->arp_tha_mask);
    } else {
         format_be16_masked(s, "tp_src", f->tp_src, wc->tp_src_mask);
         format_be16_masked(s, "tp_dst", f->tp_dst, wc->tp_dst_mask);
@@ -1228,7 +1291,7 @@ flow_equal_except(const struct flow *a, const struct flow *b,
     const flow_wildcards_t wc = wildcards->wildcards;
     int i;
 
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 12);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 14);
 
     for (i = 0; i < FLOW_N_REGS; i++) {
         if ((a->regs[i] ^ b->regs[i]) & wildcards->reg_masks[i]) {
@@ -1254,9 +1317,11 @@ flow_equal_except(const struct flow *a, const struct flow *b,
             && (wc & FWW_NW_DSCP || !((a->nw_tos ^ b->nw_tos) & IP_DSCP_MASK))
             && (wc & FWW_NW_ECN || !((a->nw_tos ^ b->nw_tos) & IP_ECN_MASK))
             && !((a->nw_frag ^ b->nw_frag) & wildcards->nw_frag_mask)
-            && (wc & FWW_ARP_SHA || eth_addr_equals(a->arp_sha, b->arp_sha))
-            && (wc & FWW_ARP_THA || eth_addr_equals(a->arp_tha, b->arp_tha))
-            && (wc & FWW_IPV6_LABEL || a->ipv6_label == b->ipv6_label)
+            && eth_addr_equal_except(a->arp_sha, b->arp_sha,
+                                     wildcards->arp_sha_mask)
+            && eth_addr_equal_except(a->arp_tha, b->arp_tha,
+                                     wildcards->arp_tha_mask)
+            && !((a->ipv6_label ^ b->ipv6_label) & wildcards->ipv6_label_mask)
             && ipv6_equal_except(&a->ipv6_src, &b->ipv6_src,
                     &wildcards->ipv6_src_mask)
             && ipv6_equal_except(&a->ipv6_dst, &b->ipv6_dst,

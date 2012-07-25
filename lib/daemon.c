@@ -39,7 +39,8 @@
 VLOG_DEFINE_THIS_MODULE(daemon);
 
 /* --detach: Should we run in the background? */
-static bool detach;
+static bool detach;             /* Was --detach specified? */
+static bool detached;           /* Have we already detached? */
 
 /* --pidfile: Name of pidfile (null if none). */
 static char *pidfile;
@@ -245,6 +246,32 @@ daemonize(void)
     daemonize_complete();
 }
 
+/* Calls fork() and on success returns its return value.  On failure, logs an
+ * error and exits unsuccessfully.
+ *
+ * Post-fork, but before returning, this function calls a few other functions
+ * that are generally useful if the child isn't planning to exec a new
+ * process. */
+pid_t
+fork_and_clean_up(void)
+{
+    pid_t pid;
+
+    pid = fork();
+    if (pid > 0) {
+        /* Running in parent process. */
+        fatal_signal_fork();
+    } else if (!pid) {
+        /* Running in child process. */
+        time_postfork();
+        lockfile_postfork();
+    } else {
+        VLOG_FATAL("fork failed (%s)", strerror(errno));
+    }
+
+    return pid;
+}
+
 /* Forks, then:
  *
  *   - In the parent, waits for the child to signal that it has completed its
@@ -264,14 +291,13 @@ fork_and_wait_for_startup(int *fdp)
 
     xpipe(fds);
 
-    pid = fork();
+    pid = fork_and_clean_up();
     if (pid > 0) {
         /* Running in parent process. */
         size_t bytes_read;
         char c;
 
         close(fds[1]);
-        fatal_signal_fork();
         if (read_fully(fds[0], &c, 1, &bytes_read) != 0) {
             int retval;
             int status;
@@ -301,11 +327,7 @@ fork_and_wait_for_startup(int *fdp)
     } else if (!pid) {
         /* Running in child process. */
         close(fds[0]);
-        time_postfork();
-        lockfile_postfork();
         *fdp = fds[1];
-    } else {
-        VLOG_FATAL("fork failed (%s)", strerror(errno));
     }
 
     return pid;
@@ -351,13 +373,11 @@ static void
 monitor_daemon(pid_t daemon_pid)
 {
     /* XXX Should log daemon's stderr output at startup time. */
-    const char *saved_program_name;
     time_t last_restart;
     char *status_msg;
     int crashes;
 
-    saved_program_name = program_name;
-    program_name = xasprintf("monitor(%s)", program_name);
+    subprogram_name = "monitor";
     status_msg = xstrdup("healthy");
     last_restart = TIME_MIN;
     crashes = 0;
@@ -366,7 +386,7 @@ monitor_daemon(pid_t daemon_pid)
         int status;
 
         proctitle_set("%s: monitoring pid %lu (%s)",
-                      saved_program_name, (unsigned long int) daemon_pid,
+                      program_name, (unsigned long int) daemon_pid,
                       status_msg);
 
         do {
@@ -428,8 +448,7 @@ monitor_daemon(pid_t daemon_pid)
 
     /* Running in new daemon process. */
     proctitle_restore();
-    free((char *) program_name);
-    program_name = saved_program_name;
+    subprogram_name = "";
 }
 
 /* Close standard file descriptors (except any that the client has requested we
@@ -495,22 +514,38 @@ daemonize_start(void)
 }
 
 /* If daemonization is configured, then this function notifies the parent
- * process that the child process has completed startup successfully.
+ * process that the child process has completed startup successfully.  It also
+ * call daemonize_post_detach().
  *
  * Calling this function more than once has no additional effect. */
 void
 daemonize_complete(void)
 {
-    fork_notify_startup(daemonize_fd);
-    daemonize_fd = -1;
+    if (!detached) {
+        detached = true;
 
+        fork_notify_startup(daemonize_fd);
+        daemonize_fd = -1;
+        daemonize_post_detach();
+    }
+}
+
+/* If daemonization is configured, then this function does traditional Unix
+ * daemonization behavior: join a new session, chdir to the root (if not
+ * disabled), and close the standard file descriptors.
+ *
+ * It only makes sense to call this function as part of an implementation of a
+ * special daemon subprocess.  A normal daemon should just call
+ * daemonize_complete(). */
+void
+daemonize_post_detach(void)
+{
     if (detach) {
         setsid();
         if (chdir_) {
             ignore(chdir("/"));
         }
         close_standard_fds();
-        detach = false;
     }
 }
 

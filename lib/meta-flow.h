@@ -66,8 +66,10 @@ enum mf_field_id {
     MFF_ETH_TYPE,               /* be16 */
 
     MFF_VLAN_TCI,               /* be16 */
-    MFF_VLAN_VID,               /* be16 */
-    MFF_VLAN_PCP,               /* u8 */
+    MFF_DL_VLAN,                /* be16 (OpenFlow 1.0 compatibility) */
+    MFF_VLAN_VID,               /* be16 (OpenFlow 1.2 compatibility) */
+    MFF_DL_VLAN_PCP,            /* u8 (OpenFlow 1.0 compatibility) */
+    MFF_VLAN_PCP,               /* be16 (OpenFlow 1.2 compatibility) */
 
     /* L3. */
     MFF_IPV4_SRC,               /* be32 */
@@ -154,6 +156,7 @@ enum mf_prereqs {
 
     /* L2 requirements. */
     MFP_ARP,
+    MFP_VLAN_VID,
     MFP_IPV4,
     MFP_IPV6,
     MFP_IP_ANY,

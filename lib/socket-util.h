@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,8 @@
 #include <netinet/ip.h>
 
 int set_nonblocking(int fd);
+void xset_nonblocking(int fd);
+
 int get_max_fds(void);
 
 int lookup_ip(const char *host_name, struct in_addr *address);
@@ -38,7 +40,7 @@ int get_socket_rcvbuf(int sock);
 int check_connection_completion(int fd);
 int drain_rcvbuf(int fd);
 void drain_fd(int fd, size_t n_packets);
-int make_unix_socket(int style, bool nonblock, bool passcred,
+int make_unix_socket(int style, bool nonblock,
                      const char *bind_path, const char *connect_path);
 int get_unix_name_len(socklen_t sun_len);
 ovs_be32 guess_netmask(ovs_be32 ip);
@@ -68,5 +70,29 @@ char *describe_fd(int fd);
  * Value of IPTOS_PREC_INTERNETCONTROL = 0xc0 which is defined
  * in <netinet/ip.h> is used. */
 #define DSCP_DEFAULT (IPTOS_PREC_INTERNETCONTROL >> 2)
+
+/* Maximum number of fds that we support sending or receiving at one time
+ * across a Unix domain socket. */
+#define SOUTIL_MAX_FDS 8
+
+/* Iovecs. */
+size_t iovec_len(const struct iovec *iovs, size_t n_iovs);
+bool iovec_is_empty(const struct iovec *iovs, size_t n_iovs);
+
+/* Functions particularly useful for Unix domain sockets. */
+void xsocketpair(int domain, int type, int protocol, int fds[2]);
+int send_iovec_and_fds(int sock,
+                       const struct iovec *iovs, size_t n_iovs,
+                       const int fds[], size_t n_fds);
+int send_iovec_and_fds_fully(int sock,
+                             const struct iovec *iovs, size_t n_iovs,
+                             const int fds[], size_t n_fds,
+                             size_t skip_bytes, size_t *bytes_sent);
+int send_iovec_and_fds_fully_block(int sock,
+                                   const struct iovec *iovs, size_t n_iovs,
+                                   const int fds[], size_t n_fds);
+int recv_data_and_fds(int sock,
+                      void *data, size_t size,
+                      int fds[SOUTIL_MAX_FDS], size_t *n_fdsp);
 
 #endif /* socket-util.h */

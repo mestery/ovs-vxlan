@@ -105,8 +105,6 @@ main(int argc, char *argv[])
 
     daemonize_start();
 
-    VLOG_INFO("%s (Open vSwitch) %s", program_name, VERSION);
-
     error = ovsdb_file_open(file_name, false, &db, &file);
     if (error) {
         ovs_fatal(0, "%s", ovsdb_error_to_string(error));
@@ -138,6 +136,13 @@ main(int argc, char *argv[])
     }
 
     daemonize_complete();
+
+    if (!run_command) {
+        /* ovsdb-server is usually a long-running process, in which case it
+         * makes plenty of sense to log the version, but --run makes
+         * ovsdb-server more like a command-line tool, so skip it.  */
+        VLOG_INFO("%s (Open vSwitch) %s", program_name, VERSION);
+    }
 
     unixctl_command_register("exit", "", 0, 0, ovsdb_server_exit, &exiting);
     unixctl_command_register("ovsdb-server/compact", "", 0, 0,

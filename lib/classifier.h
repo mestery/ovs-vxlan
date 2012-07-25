@@ -112,6 +112,9 @@ void cls_rule_set_dl_tci_masked(struct cls_rule *,
                                 ovs_be16 tci, ovs_be16 mask);
 void cls_rule_set_any_vid(struct cls_rule *);
 void cls_rule_set_dl_vlan(struct cls_rule *, ovs_be16);
+void cls_rule_set_vlan_vid(struct cls_rule *, ovs_be16);
+void cls_rule_set_vlan_vid_masked(struct cls_rule *,
+                                  ovs_be16 vid, ovs_be16 mask);
 void cls_rule_set_any_pcp(struct cls_rule *);
 void cls_rule_set_dl_vlan_pcp(struct cls_rule *, uint8_t);
 void cls_rule_set_tp_src(struct cls_rule *, ovs_be16);
@@ -134,7 +137,11 @@ void cls_rule_set_nw_frag_masked(struct cls_rule *,
 void cls_rule_set_icmp_type(struct cls_rule *, uint8_t);
 void cls_rule_set_icmp_code(struct cls_rule *, uint8_t);
 void cls_rule_set_arp_sha(struct cls_rule *, const uint8_t[6]);
+void cls_rule_set_arp_sha_masked(struct cls_rule *, const uint8_t[6],
+                                 const uint8_t [6]);
 void cls_rule_set_arp_tha(struct cls_rule *, const uint8_t[6]);
+void cls_rule_set_arp_tha_masked(struct cls_rule *, const uint8_t[6],
+                                 const uint8_t [6]);
 void cls_rule_set_ipv6_src(struct cls_rule *, const struct in6_addr *);
 void cls_rule_set_ipv6_src_masked(struct cls_rule *, const struct in6_addr *,
                                   const struct in6_addr *);
@@ -142,6 +149,7 @@ void cls_rule_set_ipv6_dst(struct cls_rule *, const struct in6_addr *);
 void cls_rule_set_ipv6_dst_masked(struct cls_rule *, const struct in6_addr *,
                                   const struct in6_addr *);
 void cls_rule_set_ipv6_label(struct cls_rule *, ovs_be32);
+void cls_rule_set_ipv6_label_masked(struct cls_rule *, ovs_be32, ovs_be32);
 void cls_rule_set_nd_target(struct cls_rule *, const struct in6_addr *);
 void cls_rule_set_nd_target_masked(struct cls_rule *, const struct in6_addr *,
                                    const struct in6_addr *);

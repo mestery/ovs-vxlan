@@ -1,4 +1,4 @@
-/* Copyright (c) 2010 Nicira, Inc.
+/* Copyright (c) 2010, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,10 @@
 #ifndef VSWITCHD_SYSTEM_STATS
 #define VSWITCHD_SYSTEM_STATS 1
 
-void get_system_stats(struct shash *);
+#include <stdbool.h>
+
+void system_stats_enable(bool enable);
+struct smap *system_stats_run(void);
+void system_stats_wait(void);
 
 #endif /* vswitchd/system-stats.h */
