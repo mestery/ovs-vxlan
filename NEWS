@@ -1,5 +1,7 @@
 post-v1.8.0
 ------------------------
+    - FreeBSD is now a supported platform, thanks to code contributions from
+      Gaetano Catalli, Ed Maste, and Giuseppe Lettieri.
     - ovs-bugtool: New --ovs option to report only OVS related information.
     - New %t and %T log escapes to identify the subprogram within a
       cooperating group of processes or threads that emitted a log message.
@@ -7,6 +9,9 @@ post-v1.8.0
     - OpenFlow:
       - Allow bitwise masking for SHA and THA fields in ARP, SLL and TLL
         fields in IPv6 neighbor discovery messages, and IPv6 flow label.
+    - ovs-dpctl
+      - Support requesting the port number with the "port_no" option in
+        the "add-if" command.
 
 
 v1.8.0 - xx xxx xxxx
@@ -47,12 +52,12 @@ v1.8.0 - xx xxx xxxx
       instead the local timezone, by default.
 
 
-v1.7.0 - xx xxx xxxx
+v1.7.0 - 30 Jul 2012
 ------------------------
     - kernel modules are renamed. openvswitch_mod.ko is now
       openvswitch.ko and brcompat_mod.ko is now brcompat.ko.
     - Increased the number of NXM registers to 8.
-    - Added ability to configure dscp setting for manager and controller
+    - Added ability to configure DSCP setting for manager and controller
       connections.  By default, these connections have a DSCP value of
       Internetwork Control (0xc0).
     - Added the granular link health statistics, 'cfm_health', to an
@@ -68,6 +73,7 @@ v1.7.0 - xx xxx xxxx
         - Added support for spawning ovs-test server from the client.
         - Now ovs-test is able to automatically create test bridges and ports.
     - "ovs-dpctl dump-flows" now prints observed TCP flags in TCP flows.
+    - Tripled flow setup performance.
     - The "coverage/log" command previously available through ovs-appctl
       has been replaced by "coverage/show".  The new command replies with
       coverage counter values, instead of logging them.

@@ -64,7 +64,12 @@ insert_brcompat_mod_if_required () {
 insert_mod_if_required () {
     insert_openvswitch_mod_if_required || return 1
     if test X"$BRCOMPAT" = Xyes; then
-        insert_brcompat_mod_if_required || return 1
+        if insert_brcompat_mod_if_required; then
+            :
+        else
+            log_warning_msg "could not load brcompat module, disabling bridge compatibility"
+            BRCOMPAT=no
+        fi
     fi
 }
 
@@ -167,64 +172,72 @@ set_system_ids () {
     action "Configuring Open vSwitch system IDs" "$@" $extra_ids
 }
 
-start () {
+check_force_cores () {
     if test X"$FORCE_COREFILES" = Xyes; then
         ulimit -Sc 67108864
     fi
+}
+
+start_ovsdb () {
+    check_force_cores
+
+    if daemon_is_running ovsdb-server; then
+        log_success_msg "ovsdb-server is already running"
+    else
+        # Create initial database or upgrade database schema.
+        upgrade_db || return 1
+
+        # Start ovsdb-server.
+        set ovsdb-server "$DB_FILE"
+        set "$@" -vconsole:emer -vsyslog:err -vfile:info
+        set "$@" --remote=punix:"$DB_SOCK"
+        set "$@" --remote=db:Open_vSwitch,manager_options
+        set "$@" --private-key=db:SSL,private_key
+        set "$@" --certificate=db:SSL,certificate
+        set "$@" --bootstrap-ca-cert=db:SSL,ca_cert
+        start_daemon "$OVSDB_SERVER_PRIORITY" "$OVSDB_SERVER_WRAPPER" "$@" \
+            || return 1
+
+        # Initialize database settings.
+        ovs_vsctl -- init -- set Open_vSwitch . db-version="$schemaver" \
+            || return 1
+        set_system_ids || return 1
+        if test X"$DELETE_BRIDGES" = Xyes; then
+            for bridge in `ovs_vsctl list-br`; do
+        ovs_vsctl del-br $bridge
+            done
+        fi
+    fi
+}
+
+start_forwarding () {
+    check_force_cores
 
     insert_mod_if_required || return 1
 
-    if daemon_is_running ovsdb-server; then
-	log_success_msg "ovsdb-server is already running"
-    else
-	# Create initial database or upgrade database schema.
-	upgrade_db || return 1
-
-	# Start ovsdb-server.
-	set ovsdb-server "$DB_FILE"
-	set "$@" -vconsole:emer -vsyslog:err -vfile:info
-	set "$@" --remote=punix:"$DB_SOCK"
-	set "$@" --remote=db:Open_vSwitch,manager_options
-	set "$@" --private-key=db:SSL,private_key
-	set "$@" --certificate=db:SSL,certificate
-	set "$@" --bootstrap-ca-cert=db:SSL,ca_cert
-	start_daemon "$OVSDB_SERVER_PRIORITY" "$OVSDB_SERVER_WRAPPER" "$@" \
-            || return 1
-
-	# Initialize database settings.
-	ovs_vsctl -- init -- set Open_vSwitch . db-version="$schemaver" \
-	    || return 1
-	set_system_ids || return 1
-	if test X"$DELETE_BRIDGES" = Xyes; then
-            for bridge in `ovs_vsctl list-br`; do
-		ovs_vsctl del-br $bridge
-            done
-	fi
-    fi
-
     if daemon_is_running ovs-vswitchd; then
-	log_success_msg "ovs-vswitchd is already running"
+        log_success_msg "ovs-vswitchd is already running"
     else
-	# Increase the limit on the number of open file descriptors.
-	# ovs-vswitchd needs 16 per datapath, plus a few extra, so this
-	# should allow for 256 (or more) bridges.
-	ulimit -n 5000
+        # Increase the limit on the number of open file descriptors.
+        # ovs-vswitchd needs 16 per datapath, plus a few extra, so this
+        # should allow for 256 (or more) bridges.
+        ulimit -n 5000
 
-	# Start ovs-vswitchd.
-	set ovs-vswitchd unix:"$DB_SOCK"
-	set "$@" -vconsole:emer -vsyslog:err -vfile:info
-	if test X"$MLOCKALL" != Xno; then
-	    set "$@" --mlockall
-	fi
-	start_daemon "$OVS_VSWITCHD_PRIORITY" "$OVS_VSWITCHD_WRAPPER" "$@"
+	    # Start ovs-vswitchd.
+	    set ovs-vswitchd unix:"$DB_SOCK"
+	    set "$@" -vconsole:emer -vsyslog:err -vfile:info
+	    if test X"$MLOCKALL" != Xno; then
+	        set "$@" --mlockall
+	    fi
+	    start_daemon "$OVS_VSWITCHD_PRIORITY" "$OVS_VSWITCHD_WRAPPER" "$@"
     fi
 
     if daemon_is_running ovs-brcompatd; then
-	log_success_msg "ovs-brcompatd is already running"
+	    log_success_msg "ovs-brcompatd is already running"
     elif test X"$BRCOMPAT" = Xyes; then
         set ovs-brcompatd
-	set "$@" -vconsole:emer -vsyslog:err -vfile:info
-	start_daemon "$OVS_BRCOMPATD_PRIORITY" "$OVS_BRCOMPATD_WRAPPER" "$@"
+	    set "$@" -vconsole:emer -vsyslog:err -vfile:info
+	    start_daemon "$OVS_BRCOMPATD_PRIORITY" "$OVS_BRCOMPATD_WRAPPER" "$@"
     fi
 }
 
@@ -232,10 +245,13 @@ start () {
 ## stop ##
 ## ---- ##
 
-stop () {
+stop_ovsdb () {
+    stop_daemon ovsdb-server
+}
+
+stop_forwarding () {
     stop_daemon ovs-brcompatd
     stop_daemon ovs-vswitchd
-    stop_daemon ovsdb-server
 }
 
 ## ----------------- ##
@@ -255,11 +271,11 @@ internal_interfaces () {
     # But ignore interfaces that don't really exist.
     for d in `(ovs_vsctl --bare \
                 -- --columns=name find Interface type=internal \
-		-- list-br) | sort -u`
+		    -- list-br) | sort -u`
     do
         if test -e "/sys/class/net/$d"; then
-	    printf "%s " "$d"
-	fi
+	        printf "%s " "$d"
+	    fi
     done
 }
 
@@ -271,7 +287,12 @@ force_reload_kmod () {
     ifaces=`internal_interfaces`
     action "Detected internal interfaces: $ifaces" true
 
-    stop
+    # Restart the database first, since a large database may take a
+    # while to load, and we want to minimize forwarding disruption.
+    stop_ovsdb
+    start_ovsdb
+
+    stop_forwarding
 
     script=`mktemp`
     trap 'rm -f "$script"' 0 1 2 13 15
@@ -279,7 +300,7 @@ force_reload_kmod () {
         :
     else
         log_warning_msg "Failed to save configuration, not replacing kernel module"
-        start
+        start_forwarding
         exit 1
     fi
     chmod +x "$script"
@@ -300,7 +321,7 @@ force_reload_kmod () {
         action "Removing openvswitch module" rmmod openvswitch
     fi
 
-    start
+    start_forwarding
 
     action "Restoring interface configuration" "$script"
     rc=$?
@@ -562,10 +583,12 @@ do
 done
 case $command in
     start)
-        start
+        start_ovsdb
+        start_forwarding
         ;;
     stop)
-        stop
+        stop_forwarding
+        stop_ovsdb
         ;;
     status)
         rc=0
@@ -580,7 +603,7 @@ case $command in
         done
         ;;
     force-reload-kmod)
-	force_reload_kmod
+	    force_reload_kmod
         ;;
     load-kmod)
         insert_mod_if_required
