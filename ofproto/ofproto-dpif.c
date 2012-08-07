@@ -1964,7 +1964,7 @@ bundle_set(struct ofproto *ofproto_, void *aux,
         break;
 
     case PORT_VLAN_TRUNK:
-        trunks = (unsigned long *) s->trunks;
+        trunks = CONST_CAST(unsigned long *, s->trunks);
         break;
 
     case PORT_VLAN_NATIVE_UNTAGGED:
@@ -1981,7 +1981,7 @@ bundle_set(struct ofproto *ofproto_, void *aux,
             bitmap_set1(trunks, vlan);
             bitmap_set0(trunks, 0);
         } else {
-            trunks = (unsigned long *) s->trunks;
+            trunks = CONST_CAST(unsigned long *, s->trunks);
         }
         break;
 
@@ -4732,7 +4732,7 @@ send_packet(const struct ofport_dpif *ofport, struct ofpbuf *packet)
     struct flow flow;
     int error;
 
-    flow_extract((struct ofpbuf *) packet, 0, 0, 0, &flow);
+    flow_extract(packet, 0, 0, 0, &flow);
     odp_port = vsp_realdev_to_vlandev(ofproto, ofport->odp_port,
                                       flow.vlan_tci);
     if (odp_port != ofport->odp_port) {

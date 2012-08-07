@@ -28,6 +28,15 @@ datadir=${OVS_PKGDATADIR-'@pkgdatadir@'}        # /usr/share/openvswitch
 bindir=${OVS_BINDIR-'@bindir@'}                 # /usr/bin
 sbindir=${OVS_SBINDIR-'@sbindir@'}              # /usr/sbin
 
+# /etc/openvswitch or /var/lib/openvswitch
+if test X"$OVS_DBDIR" != X; then
+    dbdir=$OVS_DBDIR
+elif test X"$OVS_SYSCONFDIR" != X; then
+    dbdir=$OVS_SYSCONFDIR/openvswitch
+else
+    dbdir='@DBDIR@'
+fi
+
 VERSION='@VERSION@'
 
 LC_ALL=C; export LC_ALL

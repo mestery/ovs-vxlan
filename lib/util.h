@@ -61,6 +61,16 @@
 #define BUILD_ASSERT_DECL_GCCONLY(EXPR) ((void) 0)
 #endif
 
+/* Casts 'pointer' to 'type' and issues a compiler warning if the cast changes
+ * anything other than an outermost "const" or "volatile" qualifier.
+ *
+ * The cast to int is present only to suppress an "expression using sizeof
+ * bool" warning from "sparse" (see
+ * http://permalink.gmane.org/gmane.comp.parsers.sparse/2967). */
+#define CONST_CAST(TYPE, POINTER)                               \
+    ((void) sizeof ((int) ((POINTER) == (TYPE) (POINTER))),     \
+     (TYPE) (POINTER))
+
 extern const char *program_name;
 extern const char *subprogram_name;
 
@@ -218,6 +228,9 @@ char *get_cwd(void);
 char *dir_name(const char *file_name);
 char *base_name(const char *file_name);
 char *abs_file_name(const char *dir, const char *file_name);
+
+char *xreadlink(const char *filename);
+char *follow_symlinks(const char *filename);
 
 void ignore(bool x OVS_UNUSED);
 int log_2_floor(uint32_t);

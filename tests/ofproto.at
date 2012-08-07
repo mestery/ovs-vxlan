@@ -886,14 +886,19 @@ AT_CLEANUP
 AT_SETUP([ofproto - flow monitoring pause and resume])
 AT_KEYWORDS([monitor])
 
-# With a Linux kernel, this file has the maximum socket receive buffer
-# size.  That's important for this test, which tests behavior when the
-# receive buffer overflows.
-AT_SKIP_IF([test ! -e /proc/sys/net/core/rmem_max])
-
+# The maximum socket receive buffer size is important for this test, which
+# tests behavior when the receive buffer overflows.
+if test -e /proc/sys/net/core/rmem_max; then
+    # Linux
+    rmem_max=`cat /proc/sys/net/core/rmem_max`
+elif rmem_max=`sysctl -n net.inet.tcp.recvbuf_max 2>/dev/null`; then
+    : # FreeBSD
+else
+    # Don't know how to get maximum socket receive buffer on this OS
+    AT_SKIP_IF([:])
+fi
 # Calculate the total amount of queuing: rmem_max in the kernel, 128 kB
 # in ofproto sending userspace (see ofmonitor_flush() in connmgr.c).
-rmem_max=`cat /proc/sys/net/core/rmem_max`
 queue_size=`expr $rmem_max + 128 \* 1024`
 echo rmem_max=$rmem_max queue_size=$queue_size
 
@@ -905,6 +910,7 @@ echo n_msgs=$n_msgs
 OVS_VSWITCHD_START
 
 # Start a monitor watching the flow table, then make it block.
+trap 'kill `cat ovsdb-server.pid ovs-vswitchd.pid ovs-ofctl.pid`' 0
 ovs-ofctl monitor br0 watch: --detach --no-chdir --pidfile >monitor.log 2>&1
 AT_CAPTURE_FILE([monitor.log])
 ovs-appctl -t ovs-ofctl ofctl/block
@@ -917,6 +923,8 @@ perl -e '
     }
 ') > flows.txt
 AT_CHECK([ovs-ofctl add-flows br0 flows.txt])
+# Check that multipart flow dumps work properly:
+AT_CHECK([ovs-ofctl diff-flows br0 flows.txt])
 AT_CHECK([ovs-ofctl add-flow br0 in_port=1,cookie=3,actions=drop])
 AT_CHECK([ovs-ofctl mod-flows br0 in_port=2,cookie=2,actions=output:2])
 AT_CHECK([ovs-ofctl del-flows br0 cookie=1/-1])
@@ -934,17 +942,38 @@ echo adds=$adds deletes=$deletes
 AT_CHECK([test $adds -gt 100 && test $adds -lt $n_msgs])
 AT_CHECK([test $adds = $deletes])
 
-# Check that the flow monitor reported everything in the expected order.
+# Check that the flow monitor reported everything in the expected order:
+#
+#     event=ADDED table=0 cookie=0x1 reg1=0x22
+# ...
+#    NXT_FLOW_MONITOR_PAUSED:
+# ...
+#     event=DELETED reason=delete table=0 cookie=0x1 reg1=0x22
+# ...
+#     event=ADDED table=0 cookie=0x3 in_port=1
+#     event=MODIFIED table=0 cookie=0x2 in_port=2 actions=output:2
+#    NXT_FLOW_MONITOR_RESUMED:
+#
+# except that, between the PAUSED and RESUMED, the order of the ADDED
+# and MODIFIED lines lines depends on hash order, that is, it varies
+# as we change the hash function or change architecture.  Therefore,
+# we use a couple of tests below to accept both orders.
 AT_CHECK([ofctl_strip < monitor.log | sed -n -e '
-/reg1=0x22\b/p
+/reg1=0x22$/p
 /cookie=0x[[23]]/p
 /NXT_FLOW_MONITOR_PAUSED:/p
 /NXT_FLOW_MONITOR_RESUMED:/p
-'], [0],
-[ event=ADDED table=0 cookie=0x1 reg1=0x22
+' > monitor.log.subset])
+AT_CHECK([grep -v MODIFIED monitor.log.subset], [0], [dnl
+ event=ADDED table=0 cookie=0x1 reg1=0x22
 NXT_FLOW_MONITOR_PAUSED:
  event=DELETED reason=delete table=0 cookie=0x1 reg1=0x22
  event=ADDED table=0 cookie=0x3 in_port=1
+NXT_FLOW_MONITOR_RESUMED:
+])
+AT_CHECK([grep -v ADDED monitor.log.subset], [0], [dnl
+NXT_FLOW_MONITOR_PAUSED:
+ event=DELETED reason=delete table=0 cookie=0x1 reg1=0x22
  event=MODIFIED table=0 cookie=0x2 in_port=2 actions=output:2
 NXT_FLOW_MONITOR_RESUMED:
 ])

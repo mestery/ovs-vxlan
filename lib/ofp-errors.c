@@ -21,20 +21,27 @@ struct pair {
  * 'version' (one of the possible values of struct ofp_header's 'version'
  * member).  Returns NULL if the version isn't defined or isn't understood by
  * OVS. */
-const struct ofperr_domain *
-ofperr_domain_from_version(uint8_t version)
+static const struct ofperr_domain *
+ofperr_domain_from_version(enum ofp_version version)
 {
-    return (version == ofperr_of10.version ? &ofperr_of10
-            : version == ofperr_of11.version ? &ofperr_of11
-            : version == ofperr_of12.version ? &ofperr_of12
-            : NULL);
+    switch (version) {
+    case OFP10_VERSION:
+        return &ofperr_of10;
+    case OFP11_VERSION:
+        return &ofperr_of11;
+    case OFP12_VERSION:
+        return &ofperr_of12;
+    default:
+        return NULL;
+    }
 }
 
-/* Returns the name (e.g. "OpenFlow 1.0") of OpenFlow error domain 'domain'. */
+/* Returns the name (e.g. "OpenFlow 1.0") of OpenFlow version 'version'. */
 const char *
-ofperr_domain_get_name(const struct ofperr_domain *domain)
+ofperr_domain_get_name(enum ofp_version version)
 {
-    return domain->name;
+    const struct ofperr_domain *domain = ofperr_domain_from_version(version);
+    return domain ? domain->name : NULL;
 }
 
 /* Returns true if 'error' is a valid OFPERR_* value, false otherwise. */
@@ -71,26 +78,31 @@ ofperr_is_nx_extension(enum ofperr error)
  * A given error may not be encodable in some domains because each OpenFlow
  * version tends to introduce new errors and retire some old ones. */
 bool
-ofperr_is_encodable(enum ofperr error, const struct ofperr_domain *domain)
+ofperr_is_encodable(enum ofperr error, enum ofp_version version)
 {
+    const struct ofperr_domain *domain = ofperr_domain_from_version(version);
     return (ofperr_is_valid(error)
-            && domain->errors[error - OFPERR_OFS].code >= 0);
+            && domain && domain->errors[error - OFPERR_OFS].code >= 0);
 }
 
 /* Returns the OFPERR_* value that corresponds to 'type' and 'code' within
- * 'domain', or 0 if no such OFPERR_* value exists. */
+ * 'version', or 0 if either no such OFPERR_* value exists or 'version' is
+ * unknown. */
 enum ofperr
-ofperr_decode(const struct ofperr_domain *domain, uint16_t type, uint16_t code)
+ofperr_decode(enum ofp_version version, uint16_t type, uint16_t code)
 {
-    return domain->decode(type, code);
+    const struct ofperr_domain *domain = ofperr_domain_from_version(version);
+    return domain ? domain->decode(type, code) : 0;
 }
 
 /* Returns the OFPERR_* value that corresponds to the category 'type' within
- * 'domain', or 0 if no such OFPERR_* value exists. */
+ * 'version', or 0 if either no such OFPERR_* value exists or 'version' is
+ * unknown. */
 enum ofperr
-ofperr_decode_type(const struct ofperr_domain *domain, uint16_t type)
+ofperr_decode_type(enum ofp_version version, uint16_t type)
 {
-    return domain->decode_type(type);
+    const struct ofperr_domain *domain = ofperr_domain_from_version(version);
+    return domain ? domain->decode_type(type) : 0;
 }
 
 /* Returns the name of 'error', e.g. "OFPBRC_BAD_TYPE" if 'error' is
@@ -145,18 +157,20 @@ ofperr_get_pair__(enum ofperr error, const struct ofperr_domain *domain)
 }
 
 static struct ofpbuf *
-ofperr_encode_msg__(enum ofperr error, const struct ofperr_domain *domain,
+ofperr_encode_msg__(enum ofperr error, enum ofp_version ofp_version,
                     ovs_be32 xid, const void *data, size_t data_len)
 {
     struct ofp_error_msg *oem;
     const struct pair *pair;
     struct ofpbuf *buf;
+    const struct ofperr_domain *domain;
 
+    domain = ofperr_domain_from_version(ofp_version);
     if (!domain) {
         return NULL;
     }
 
-    if (!ofperr_is_encodable(error, domain)) {
+    if (!ofperr_is_encodable(error, ofp_version)) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
 
         if (!ofperr_is_valid(error)) {
@@ -220,53 +234,62 @@ ofperr_encode_msg__(enum ofperr error, const struct ofperr_domain *domain,
 struct ofpbuf *
 ofperr_encode_reply(enum ofperr error, const struct ofp_header *oh)
 {
-    const struct ofperr_domain *domain;
     uint16_t len = ntohs(oh->length);
 
-    domain = ofperr_domain_from_version(oh->version);
-    return ofperr_encode_msg__(error, domain, oh->xid, oh, MIN(len, 64));
+    return ofperr_encode_msg__(error, oh->version, oh->xid, oh, MIN(len, 64));
 }
 
 /* Creates and returns an OpenFlow message of type OFPT_ERROR that conveys the
  * given 'error', in the error domain 'domain'.  The error message will include
  * the additional null-terminated text string 's'.
  *
- * If 'domain' is NULL, uses the OpenFlow 1.0 error domain.  OFPET_HELLO_FAILED
- * error messages are supposed to be backward-compatible, so in theory this
- * should work.
+ * If 'version' is an unknown version then OFP10_VERSION is used.
+ * OFPET_HELLO_FAILED error messages are supposed to be backward-compatible,
+ * so in theory this should work.
  *
  * Returns NULL if 'error' is not an OpenFlow error code or if 'error' cannot
  * be encoded in 'domain'. */
 struct ofpbuf *
-ofperr_encode_hello(enum ofperr error, const struct ofperr_domain *domain,
+ofperr_encode_hello(enum ofperr error, enum ofp_version ofp_version,
                     const char *s)
 {
-    if (!domain) {
-        domain = &ofperr_of10;
+    switch (ofp_version) {
+    case OFP10_VERSION:
+    case OFP11_VERSION:
+    case OFP12_VERSION:
+        break;
+
+    default:
+        ofp_version = OFP10_VERSION;
     }
-    return ofperr_encode_msg__(error, domain, htonl(0), s, strlen(s));
+
+    return ofperr_encode_msg__(error, ofp_version, htonl(0), s, strlen(s));
 }
 
 /* Returns the value that would go into an OFPT_ERROR message's 'type' for
  * encoding 'error' in 'domain'.  Returns -1 if 'error' is not encodable in
- * 'domain'.
+ * 'version' or 'version' is unknown.
  *
  * 'error' must be a valid OFPERR_* code, as checked by ofperr_is_valid(). */
 int
-ofperr_get_type(enum ofperr error, const struct ofperr_domain *domain)
+ofperr_get_type(enum ofperr error, enum ofp_version version)
 {
-    return ofperr_get_pair__(error, domain)->type;
+    const struct ofperr_domain *domain = ofperr_domain_from_version(version);
+    return domain ? ofperr_get_pair__(error, domain)->type : -1;
 }
 
 /* Returns the value that would go into an OFPT_ERROR message's 'code' for
  * encoding 'error' in 'domain'.  Returns -1 if 'error' is not encodable in
- * 'domain' or if 'error' represents a category rather than a specific error.
+ * 'version', 'version' is unknown or if 'error' represents a category
+ * rather than a specific error.
+ *
  *
  * 'error' must be a valid OFPERR_* code, as checked by ofperr_is_valid(). */
 int
-ofperr_get_code(enum ofperr error, const struct ofperr_domain *domain)
+ofperr_get_code(enum ofperr error, enum ofp_version version)
 {
-    return ofperr_get_pair__(error, domain)->code;
+    const struct ofperr_domain *domain = ofperr_domain_from_version(version);
+    return domain ? ofperr_get_pair__(error, domain)->code : -1;
 }
 
 /* Tries to decodes 'oh', which should be an OpenFlow OFPT_ERROR message.
@@ -279,7 +302,6 @@ ofperr_decode_msg(const struct ofp_header *oh, struct ofpbuf *payload)
 {
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
 
-    const struct ofperr_domain *domain;
     const struct ofp_error_msg *oem;
     enum ofpraw raw;
     uint16_t type, code;
@@ -297,12 +319,6 @@ ofperr_decode_msg(const struct ofp_header *oh, struct ofpbuf *payload)
         return 0;
     }
     oem = ofpbuf_pull(&b, sizeof *oem);
-
-    /* Check version. */
-    domain = ofperr_domain_from_version(oh->version);
-    if (!domain) {
-        return 0;
-    }
 
     /* Get the error type and code. */
     type = ntohs(oem->type);
@@ -324,9 +340,9 @@ ofperr_decode_msg(const struct ofp_header *oh, struct ofpbuf *payload)
 
     /* Translate the error type and code into an ofperr.
      * If we don't know the error type and code, at least try for the type. */
-    error = ofperr_decode(domain, type, code);
+    error = ofperr_decode(oh->version, type, code);
     if (!error) {
-        error = ofperr_decode_type(domain, type);
+        error = ofperr_decode_type(oh->version, type);
     }
     if (error && payload) {
         ofpbuf_use_const(payload, b.data, b.size);

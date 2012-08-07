@@ -52,7 +52,16 @@ struct lswitch_port {
     uint32_t queue_id;          /* OpenFlow queue number. */
 };
 
+enum lswitch_state {
+    S_CONNECTING,               /* Waiting for connection to complete. */
+    S_FEATURES_REPLY,           /* Waiting for features reply. */
+    S_SWITCHING,                /* Switching flows. */
+};
+
 struct lswitch {
+    struct rconn *rconn;
+    enum lswitch_state state;
+
     /* If nonnegative, the switch sets up flows that expire after the given
      * number of seconds (or never expire, if the value is OFP_FLOW_PERMANENT).
      * Otherwise, the switch processes every packet. */
@@ -60,7 +69,6 @@ struct lswitch {
 
     enum ofputil_protocol protocol;
     unsigned long long int datapath_id;
-    time_t last_features_request;
     struct mac_learning *ml;    /* NULL to act as hub instead of switch. */
     struct flow_wildcards wc;   /* Wildcards to apply to flows. */
     bool action_normal;         /* Use OFPP_NORMAL? */
@@ -72,21 +80,29 @@ struct lswitch {
 
     /* Number of outgoing queued packets on the rconn. */
     struct rconn_packet_counter *queued;
+
+    /* If true, do not reply to any messages from the switch (for debugging
+     * fail-open mode). */
+    bool mute;
+
+    /* Optional "flow mod" requests to send to the switch at connection time,
+     * to set up the flow table. */
+    const struct ofputil_flow_mod *default_flows;
+    size_t n_default_flows;
 };
 
 /* The log messages here could actually be useful in debugging, so keep the
  * rate limit relatively high. */
 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(30, 300);
 
-static void queue_tx(struct lswitch *, struct rconn *, struct ofpbuf *);
-static void send_features_request(struct lswitch *, struct rconn *);
+static void queue_tx(struct lswitch *, struct ofpbuf *);
+static void send_features_request(struct lswitch *);
 
+static void lswitch_process_packet(struct lswitch *, const struct ofpbuf *);
 static enum ofperr process_switch_features(struct lswitch *,
                                            struct ofp_header *);
-static void process_packet_in(struct lswitch *, struct rconn *,
-                              const struct ofp_header *);
-static void process_echo_request(struct lswitch *, struct rconn *,
-                                 const struct ofp_header *);
+static void process_packet_in(struct lswitch *, const struct ofp_header *);
+static void process_echo_request(struct lswitch *, const struct ofp_header *);
 
 /* Creates and returns a new learning switch whose configuration is given by
  * 'cfg'.
@@ -95,36 +111,39 @@ static void process_echo_request(struct lswitch *, struct rconn *,
 struct lswitch *
 lswitch_create(struct rconn *rconn, const struct lswitch_config *cfg)
 {
-    enum ofputil_protocol protocol;
     struct lswitch *sw;
+    uint32_t ofpfw;
 
     sw = xzalloc(sizeof *sw);
+    sw->rconn = rconn;
+    sw->state = S_CONNECTING;
     sw->max_idle = cfg->max_idle;
     sw->datapath_id = 0;
-    sw->last_features_request = time_now() - 1;
     sw->ml = (cfg->mode == LSW_LEARN
               ? mac_learning_create(MAC_ENTRY_DEFAULT_IDLE_TIME)
               : NULL);
     sw->action_normal = cfg->mode == LSW_NORMAL;
 
-    flow_wildcards_init_exact(&sw->wc);
-    if (cfg->wildcards) {
-        uint32_t ofpfw;
+    switch (cfg->wildcards) {
+    case 0:
+        ofpfw = 0;
+        break;
 
-        if (cfg->wildcards == UINT32_MAX) {
-            /* Try to wildcard as many fields as possible, but we cannot
-             * wildcard all fields.  We need in_port to detect moves.  We need
-             * Ethernet source and dest and VLAN VID to do L2 learning. */
-            ofpfw = (OFPFW10_DL_TYPE | OFPFW10_DL_VLAN_PCP
-                     | OFPFW10_NW_SRC_ALL | OFPFW10_NW_DST_ALL
-                     | OFPFW10_NW_TOS | OFPFW10_NW_PROTO
-                     | OFPFW10_TP_SRC | OFPFW10_TP_DST);
-        } else {
-            ofpfw = cfg->wildcards;
-        }
+    case UINT32_MAX:
+        /* Try to wildcard as many fields as possible, but we cannot
+         * wildcard all fields.  We need in_port to detect moves.  We need
+         * Ethernet source and dest and VLAN VID to do L2 learning. */
+        ofpfw = (OFPFW10_DL_TYPE | OFPFW10_DL_VLAN_PCP
+                 | OFPFW10_NW_SRC_ALL | OFPFW10_NW_DST_ALL
+                 | OFPFW10_NW_TOS | OFPFW10_NW_PROTO
+                 | OFPFW10_TP_SRC | OFPFW10_TP_DST);
+        break;
 
-        ofputil_wildcard_from_ofpfw10(ofpfw, &sw->wc);
+    default:
+        ofpfw = cfg->wildcards;
+        break;
     }
+    ofputil_wildcard_from_ofpfw10(ofpfw, &sw->wc);
 
     sw->default_queue = cfg->default_queue;
     hmap_init(&sw->queue_numbers);
@@ -140,11 +159,23 @@ lswitch_create(struct rconn *rconn, const struct lswitch_config *cfg)
         }
     }
 
-    sw->queued = rconn_packet_counter_create();
-    send_features_request(sw, rconn);
+    sw->default_flows = cfg->default_flows;
+    sw->n_default_flows = cfg->n_default_flows;
 
-    protocol = ofputil_protocol_from_ofp_version(rconn_get_version(rconn));
-    if (cfg->default_flows) {
+    sw->queued = rconn_packet_counter_create();
+
+    return sw;
+}
+
+static void
+lswitch_handshake(struct lswitch *sw)
+{
+    enum ofputil_protocol protocol;
+
+    send_features_request(sw);
+
+    protocol = ofputil_protocol_from_ofp_version(rconn_get_version(sw->rconn));
+    if (sw->default_flows) {
         enum ofputil_protocol usable_protocols;
         struct ofpbuf *msg = NULL;
         int error = 0;
@@ -158,7 +189,7 @@ lswitch_create(struct rconn *rconn, const struct lswitch_config *cfg)
          * flow format with the switch, but that would require an asynchronous
          * state machine.  This version ought to work fine in practice. */
         usable_protocols = ofputil_flow_mod_usable_protocols(
-            cfg->default_flows, cfg->n_default_flows);
+            sw->default_flows, sw->n_default_flows);
         if (!(protocol & usable_protocols)) {
             enum ofputil_protocol want = rightmost_1bit(usable_protocols);
             while (!error) {
@@ -166,23 +197,27 @@ lswitch_create(struct rconn *rconn, const struct lswitch_config *cfg)
                 if (!msg) {
                     break;
                 }
-                error = rconn_send(rconn, msg, NULL);
+                error = rconn_send(sw->rconn, msg, NULL);
             }
         }
 
-        for (i = 0; !error && i < cfg->n_default_flows; i++) {
-            msg = ofputil_encode_flow_mod(&cfg->default_flows[i], protocol);
-            error = rconn_send(rconn, msg, NULL);
+        for (i = 0; !error && i < sw->n_default_flows; i++) {
+            msg = ofputil_encode_flow_mod(&sw->default_flows[i], protocol);
+            error = rconn_send(sw->rconn, msg, NULL);
         }
 
         if (error) {
             VLOG_INFO_RL(&rl, "%s: failed to queue default flows (%s)",
-                         rconn_get_name(rconn), strerror(error));
+                         rconn_get_name(sw->rconn), strerror(error));
         }
     }
     sw->protocol = protocol;
+}
 
-    return sw;
+bool
+lswitch_is_alive(const struct lswitch *sw)
+{
+    return rconn_is_alive(sw->rconn);
 }
 
 /* Destroys 'sw'. */
@@ -192,6 +227,7 @@ lswitch_destroy(struct lswitch *sw)
     if (sw) {
         struct lswitch_port *node, *next;
 
+        rconn_destroy(sw->rconn);
         HMAP_FOR_EACH_SAFE (node, next, hmap_node, &sw->queue_numbers) {
             hmap_remove(&sw->queue_numbers, &node->hmap_node);
             free(node);
@@ -208,8 +244,34 @@ lswitch_destroy(struct lswitch *sw)
 void
 lswitch_run(struct lswitch *sw)
 {
+    int i;
+
     if (sw->ml) {
         mac_learning_run(sw->ml, NULL);
+    }
+
+    rconn_run(sw->rconn);
+
+    if (sw->state == S_CONNECTING) {
+        if (rconn_get_version(sw->rconn) != -1) {
+            lswitch_handshake(sw);
+            sw->state = S_FEATURES_REPLY;
+        }
+        return;
+    }
+
+    for (i = 0; i < 50; i++) {
+        struct ofpbuf *msg;
+
+        msg = rconn_recv(sw->rconn);
+        if (!msg) {
+            break;
+        }
+
+        if (!sw->mute) {
+            lswitch_process_packet(sw, msg);
+        }
+        ofpbuf_delete(msg);
     }
 }
 
@@ -219,15 +281,16 @@ lswitch_wait(struct lswitch *sw)
     if (sw->ml) {
         mac_learning_wait(sw->ml);
     }
+    rconn_run_wait(sw->rconn);
+    rconn_recv_wait(sw->rconn);
 }
 
 /* Processes 'msg', which should be an OpenFlow received on 'rconn', according
  * to the learning switch state in 'sw'.  The most likely result of processing
  * is that flow-setup and packet-out OpenFlow messages will be sent out on
  * 'rconn'.  */
-void
-lswitch_process_packet(struct lswitch *sw, struct rconn *rconn,
-                       const struct ofpbuf *msg)
+static void
+lswitch_process_packet(struct lswitch *sw, const struct ofpbuf *msg)
 {
     enum ofptype type;
     struct ofpbuf b;
@@ -237,24 +300,29 @@ lswitch_process_packet(struct lswitch *sw, struct rconn *rconn,
         return;
     }
 
-    if (sw->datapath_id == 0
+    if (sw->state == S_FEATURES_REPLY
         && type != OFPTYPE_ECHO_REQUEST
         && type != OFPTYPE_FEATURES_REPLY) {
-        send_features_request(sw, rconn);
         return;
     }
 
     switch (type) {
     case OFPTYPE_ECHO_REQUEST:
-        process_echo_request(sw, rconn, msg->data);
+        process_echo_request(sw, msg->data);
         break;
 
     case OFPTYPE_FEATURES_REPLY:
-        process_switch_features(sw, msg->data);
+        if (sw->state == S_FEATURES_REPLY) {
+            if (!process_switch_features(sw, msg->data)) {
+                sw->state = S_SWITCHING;
+            } else {
+                rconn_disconnect(sw->rconn);
+            }
+        }
         break;
 
     case OFPTYPE_PACKET_IN:
-        process_packet_in(sw, rconn, msg->data);
+        process_packet_in(sw, msg->data);
         break;
 
     case OFPTYPE_FLOW_REMOVED:
@@ -312,38 +380,36 @@ lswitch_process_packet(struct lswitch *sw, struct rconn *rconn,
 }
 
 static void
-send_features_request(struct lswitch *sw, struct rconn *rconn)
+send_features_request(struct lswitch *sw)
 {
-    time_t now = time_now();
-    if (now >= sw->last_features_request + 1) {
-        struct ofpbuf *b;
-        struct ofp_switch_config *osc;
+    struct ofpbuf *b;
+    struct ofp_switch_config *osc;
+    int ofp_version = rconn_get_version(sw->rconn);
 
-        /* Send OFPT_FEATURES_REQUEST. */
-        b = ofpraw_alloc(OFPRAW_OFPT_FEATURES_REQUEST, OFP10_VERSION, 0);
-        queue_tx(sw, rconn, b);
+    assert(ofp_version > 0 && ofp_version < 0xff);
 
-        /* Send OFPT_SET_CONFIG. */
-        b = ofpraw_alloc(OFPRAW_OFPT_SET_CONFIG, OFP10_VERSION, sizeof *osc);
-        osc = ofpbuf_put_uninit(b, sizeof *osc);
-        osc->miss_send_len = htons(OFP_DEFAULT_MISS_SEND_LEN);
-        queue_tx(sw, rconn, b);
+    /* Send OFPT_FEATURES_REQUEST. */
+    b = ofpraw_alloc(OFPRAW_OFPT_FEATURES_REQUEST, ofp_version, 0);
+    queue_tx(sw, b);
 
-        sw->last_features_request = now;
-    }
+    /* Send OFPT_SET_CONFIG. */
+    b = ofpraw_alloc(OFPRAW_OFPT_SET_CONFIG, ofp_version, sizeof *osc);
+    osc = ofpbuf_put_zeros(b, sizeof *osc);
+    osc->miss_send_len = htons(OFP_DEFAULT_MISS_SEND_LEN);
+    queue_tx(sw, b);
 }
 
 static void
-queue_tx(struct lswitch *sw, struct rconn *rconn, struct ofpbuf *b)
+queue_tx(struct lswitch *sw, struct ofpbuf *b)
 {
-    int retval = rconn_send_with_limit(rconn, b, sw->queued, 10);
+    int retval = rconn_send_with_limit(sw->rconn, b, sw->queued, 10);
     if (retval && retval != ENOTCONN) {
         if (retval == EAGAIN) {
             VLOG_INFO_RL(&rl, "%016llx: %s: tx queue overflow",
-                         sw->datapath_id, rconn_get_name(rconn));
+                         sw->datapath_id, rconn_get_name(sw->rconn));
         } else {
             VLOG_WARN_RL(&rl, "%016llx: %s: send: %s",
-                         sw->datapath_id, rconn_get_name(rconn),
+                         sw->datapath_id, rconn_get_name(sw->rconn),
                          strerror(retval));
         }
     }
@@ -438,8 +504,7 @@ get_queue_id(const struct lswitch *sw, uint16_t in_port)
 }
 
 static void
-process_packet_in(struct lswitch *sw, struct rconn *rconn,
-                  const struct ofp_header *oh)
+process_packet_in(struct lswitch *sw, const struct ofp_header *oh)
 {
     struct ofputil_packet_in pi;
     uint32_t queue_id;
@@ -511,6 +576,7 @@ process_packet_in(struct lswitch *sw, struct rconn *rconn,
          * new flow. */
         memset(&fm, 0, sizeof fm);
         cls_rule_init(&flow, &sw->wc, 0, &fm.cr);
+        ofputil_normalize_rule_quiet(&fm.cr);
         fm.table_id = 0xff;
         fm.command = OFPFC_ADD;
         fm.idle_timeout = sw->max_idle;
@@ -520,24 +586,23 @@ process_packet_in(struct lswitch *sw, struct rconn *rconn,
         fm.ofpacts_len = ofpacts.size;
         buffer = ofputil_encode_flow_mod(&fm, sw->protocol);
 
-        queue_tx(sw, rconn, buffer);
+        queue_tx(sw, buffer);
 
         /* If the switch didn't buffer the packet, we need to send a copy. */
         if (pi.buffer_id == UINT32_MAX && out_port != OFPP_NONE) {
-            queue_tx(sw, rconn, ofputil_encode_packet_out(&po));
+            queue_tx(sw, ofputil_encode_packet_out(&po));
         }
     } else {
         /* We don't know that MAC, or we don't set up flows.  Send along the
          * packet without setting up a flow. */
         if (pi.buffer_id != UINT32_MAX || out_port != OFPP_NONE) {
-            queue_tx(sw, rconn, ofputil_encode_packet_out(&po));
+            queue_tx(sw, ofputil_encode_packet_out(&po));
         }
     }
 }
 
 static void
-process_echo_request(struct lswitch *sw, struct rconn *rconn,
-                     const struct ofp_header *rq)
+process_echo_request(struct lswitch *sw, const struct ofp_header *rq)
 {
-    queue_tx(sw, rconn, make_echo_reply(rq));
+    queue_tx(sw, make_echo_reply(rq));
 }

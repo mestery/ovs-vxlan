@@ -114,6 +114,7 @@ void ofputil_cls_rule_from_ofp10_match(const struct ofp10_match *,
                                        unsigned int priority,
                                        struct cls_rule *);
 void ofputil_normalize_rule(struct cls_rule *);
+void ofputil_normalize_rule_quiet(struct cls_rule *);
 void ofputil_cls_rule_to_ofp10_match(const struct cls_rule *,
                                      struct ofp10_match *);
 
@@ -494,10 +495,10 @@ void ofputil_append_port_desc_stats_reply(enum ofp_version ofp_version,
                                           struct list *replies);
 
 /* Encoding simple OpenFlow messages. */
-struct ofpbuf *make_echo_request(void);
+struct ofpbuf *make_echo_request(enum ofp_version);
 struct ofpbuf *make_echo_reply(const struct ofp_header *rq);
 
-struct ofpbuf *ofputil_encode_barrier_request(void);
+struct ofpbuf *ofputil_encode_barrier_request(enum ofp_version);
 
 const char *ofputil_frag_handling_to_string(enum ofp_config_flags);
 bool ofputil_frag_handling_from_string(const char *, enum ofp_config_flags *);

@@ -143,20 +143,26 @@ static void
 test_refuse_connection(int argc OVS_UNUSED, char *argv[])
 {
     const char *type = argv[1];
-    int expected_error;
     struct fake_pvconn fpv;
     struct vconn *vconn;
-
-    expected_error = (!strcmp(type, "unix") ? EPIPE
-                      : !strcmp(type, "tcp") ? ECONNRESET
-                      : EPROTO);
+    int error;
 
     fpv_create(type, &fpv);
     CHECK_ERRNO(vconn_open(fpv.vconn_name, OFP10_VERSION, &vconn,
                            DSCP_DEFAULT), 0);
     fpv_close(&fpv);
     vconn_run(vconn);
-    CHECK_ERRNO(vconn_connect(vconn), expected_error);
+
+    error = vconn_connect_block(vconn);
+    if (!strcmp(type, "tcp")) {
+        if (error != ECONNRESET && error != EPIPE) {
+            ovs_fatal(0, "unexpected vconn_connect() return value %d (%s)",
+                      error, strerror(error));
+        }
+    } else {
+        CHECK_ERRNO(error, !strcmp(type, "unix") ? EPIPE : EPROTO);
+    }
+
     vconn_close(vconn);
     fpv_destroy(&fpv);
 }
@@ -168,13 +174,9 @@ static void
 test_accept_then_close(int argc OVS_UNUSED, char *argv[])
 {
     const char *type = argv[1];
-    int expected_error;
     struct fake_pvconn fpv;
     struct vconn *vconn;
-
-    expected_error = (!strcmp(type, "unix") ? EPIPE
-                      : !strcmp(type, "tcp") ? ECONNRESET
-                      : EPROTO);
+    int error;
 
     fpv_create(type, &fpv);
     CHECK_ERRNO(vconn_open(fpv.vconn_name, OFP10_VERSION, &vconn,
@@ -182,7 +184,17 @@ test_accept_then_close(int argc OVS_UNUSED, char *argv[])
     vconn_run(vconn);
     stream_close(fpv_accept(&fpv));
     fpv_close(&fpv);
-    CHECK_ERRNO(vconn_connect(vconn), expected_error);
+
+    error = vconn_connect_block(vconn);
+    if (!strcmp(type, "tcp") || !strcmp(type, "unix")) {
+        if (error != ECONNRESET && error != EPIPE) {
+            ovs_fatal(0, "unexpected vconn_connect() return value %d (%s)",
+                      error, strerror(error));
+        }
+    } else {
+        CHECK_ERRNO(error, EPROTO);
+    }
+
     vconn_close(vconn);
     fpv_destroy(&fpv);
 }
@@ -197,6 +209,7 @@ test_read_hello(int argc OVS_UNUSED, char *argv[])
     struct fake_pvconn fpv;
     struct vconn *vconn;
     struct stream *stream;
+    int error;
 
     fpv_create(type, &fpv);
     CHECK_ERRNO(vconn_open(fpv.vconn_name, OFP10_VERSION, &vconn,
@@ -229,7 +242,11 @@ test_read_hello(int argc OVS_UNUSED, char *argv[])
        poll_block();
     }
     stream_close(stream);
-    CHECK_ERRNO(vconn_connect(vconn), ECONNRESET);
+    error = vconn_connect_block(vconn);
+    if (error != ECONNRESET && error != EPIPE) {
+        ovs_fatal(0, "unexpected vconn_connect() return value %d (%s)",
+                  error, strerror(error));
+    }
     vconn_close(vconn);
 }
 
@@ -322,7 +339,7 @@ test_send_hello(const char *type, const void *out, size_t out_size,
        poll_block();
     }
     stream_close(stream);
-    CHECK_ERRNO(vconn_recv(vconn, &msg), EOF);
+    CHECK_ERRNO(vconn_recv_block(vconn, &msg), EOF);
     vconn_close(vconn);
 }
 

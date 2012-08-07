@@ -1217,7 +1217,7 @@ ofctl_barrier(struct unixctl_conn *conn, int argc OVS_UNUSED,
         return;
     }
 
-    msg = ofputil_encode_barrier_request();
+    msg = ofputil_encode_barrier_request(vconn_get_version(aux->vconn));
     error = vconn_send_block(aux->vconn, msg);
     if (error) {
         ofpbuf_delete(msg);
@@ -1440,8 +1440,8 @@ ofctl_probe(int argc OVS_UNUSED, char *argv[])
     struct vconn *vconn;
     struct ofpbuf *reply;
 
-    request = make_echo_request();
     open_vconn(argv[1], &vconn);
+    request = make_echo_request(vconn_get_version(vconn));
     run(vconn_transact(vconn, request, &reply), "talking to %s", argv[1]);
     if (reply->size != sizeof(struct ofp_header)) {
         ovs_fatal(0, "reply does not match request");
@@ -2182,16 +2182,29 @@ ofctl_parse_nxm__(bool oxm)
 
         /* Convert string to nx_match. */
         ofpbuf_init(&nx_match, 0);
-        match_len = nx_match_from_string(ds_cstr(&in), &nx_match);
+        if (oxm) {
+            match_len = oxm_match_from_string(ds_cstr(&in), &nx_match);
+        } else {
+            match_len = nx_match_from_string(ds_cstr(&in), &nx_match);
+        }
 
         /* Convert nx_match to cls_rule. */
         if (strict) {
-            error = nx_pull_match(&nx_match, match_len, 0, &rule,
-                                  &cookie, &cookie_mask);
+            if (oxm) {
+                error = oxm_pull_match(&nx_match, 0, &rule);
+            } else {
+                error = nx_pull_match(&nx_match, match_len, 0, &rule,
+                                      &cookie, &cookie_mask);
+            }
         } else {
-            error = nx_pull_match_loose(&nx_match, match_len, 0, &rule,
-                                        &cookie, &cookie_mask);
+            if (oxm) {
+                error = oxm_pull_match_loose(&nx_match, 0, &rule);
+            } else {
+                error = nx_pull_match_loose(&nx_match, match_len, 0, &rule,
+                                            &cookie, &cookie_mask);
+            }
         }
+
 
         if (!error) {
             char *out;
@@ -2199,11 +2212,15 @@ ofctl_parse_nxm__(bool oxm)
             /* Convert cls_rule back to nx_match. */
             ofpbuf_uninit(&nx_match);
             ofpbuf_init(&nx_match, 0);
-            match_len = nx_put_match(&nx_match, oxm, &rule,
-                                     cookie, cookie_mask);
+            if (oxm) {
+                match_len = oxm_put_match(&nx_match, &rule);
+                out = oxm_match_to_string(nx_match.data, match_len);
+            } else {
+                match_len = nx_put_match(&nx_match, &rule,
+                                         cookie, cookie_mask);
+                out = nx_match_to_string(nx_match.data, match_len);
+            }
 
-            /* Convert nx_match to string. */
-            out = nx_match_to_string(nx_match.data, match_len);
             puts(out);
             free(out);
         } else {
@@ -2568,7 +2585,7 @@ ofctl_check_vlan(int argc OVS_UNUSED, char *argv[])
 
     /* Convert to and from NXM. */
     ofpbuf_init(&nxm, 0);
-    nxm_match_len = nx_put_match(&nxm, false, &rule, htonll(0), htonll(0));
+    nxm_match_len = nx_put_match(&nxm, &rule, htonll(0), htonll(0));
     nxm_s = nx_match_to_string(nxm.data, nxm_match_len);
     error = nx_pull_match(&nxm, nxm_match_len, 0, &nxm_rule, NULL, NULL);
     printf("NXM: %s -> ", nxm_s);
@@ -2584,9 +2601,9 @@ ofctl_check_vlan(int argc OVS_UNUSED, char *argv[])
 
     /* Convert to and from OXM. */
     ofpbuf_init(&nxm, 0);
-    nxm_match_len = nx_put_match(&nxm, true, &rule, htonll(0), htonll(0));
-    nxm_s = nx_match_to_string(nxm.data, nxm_match_len);
-    error = nx_pull_match(&nxm, nxm_match_len, 0, &nxm_rule, NULL, NULL);
+    nxm_match_len = oxm_put_match(&nxm, &rule);
+    nxm_s = oxm_match_to_string(nxm.data, nxm_match_len);
+    error = oxm_pull_match(&nxm, 0, &nxm_rule);
     printf("OXM: %s -> ", nxm_s);
     if (error) {
         printf("%s\n", ofperr_to_string(error));
@@ -2643,17 +2660,14 @@ ofctl_print_error(int argc OVS_UNUSED, char *argv[])
     }
 
     for (version = 0; version <= UINT8_MAX; version++) {
-        const struct ofperr_domain *domain;
-
-        domain = ofperr_domain_from_version(version);
-        if (!domain) {
+        const char *name = ofperr_domain_get_name(version);
+        if (!name) {
             continue;
         }
-
         printf("%s: %d,%d\n",
-               ofperr_domain_get_name(domain),
-               ofperr_get_type(error, domain),
-               ofperr_get_code(error, domain));
+               ofperr_domain_get_name(version),
+               ofperr_get_type(error, version),
+               ofperr_get_code(error, version));
     }
 }
 
