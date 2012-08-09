@@ -1015,9 +1015,9 @@ static struct rtable *__find_route(const struct tnl_mutable_config *mutable,
 
 	if (skb) {
 		if (OVS_CB(skb)->tun_ipv4_dst)
-			fl.nl_u.ipv4_u.daddr = OVS_CB(skb)->tun_ipv4_dst;
+			fl.fl4_dst = OVS_CB(skb)->tun_ipv4_dst;
 		if (OVS_CB(skb)->tun_ipv4_src)
-			fl.nl_u.ipv4_u.saddr = OVS_CB(skb)->tun_ipv4_src;
+			fl.fl4_src = OVS_CB(skb)->tun_ipv4_src;
 	}
 
 	if (unlikely(ip_route_output_key(port_key_get_net(&mutable->key), &rt, &fl)))
