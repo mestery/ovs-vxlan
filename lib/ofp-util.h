@@ -120,7 +120,8 @@ void ofputil_cls_rule_to_ofp10_match(const struct cls_rule *,
 
 /* Work with ofp11_match. */
 enum ofperr ofputil_pull_ofp11_match(struct ofpbuf *, unsigned int priority,
-                                     struct cls_rule *);
+                                     struct cls_rule *,
+                                     uint16_t *padded_match_len);
 enum ofperr ofputil_cls_rule_from_ofp11_match(const struct ofp11_match *,
                                               unsigned int priority,
                                               struct cls_rule *);
@@ -276,6 +277,7 @@ struct ofputil_packet_in {
 enum ofperr ofputil_decode_packet_in(struct ofputil_packet_in *,
                                      const struct ofp_header *);
 struct ofpbuf *ofputil_encode_packet_in(const struct ofputil_packet_in *,
+                                        enum ofputil_protocol protocol,
                                         enum nx_packet_in_format);
 
 const char *ofputil_packet_in_reason_to_string(enum ofp_packet_in_reason);
@@ -298,7 +300,8 @@ struct ofputil_packet_out {
 enum ofperr ofputil_decode_packet_out(struct ofputil_packet_out *,
                                       const struct ofp_header *,
                                       struct ofpbuf *ofpacts);
-struct ofpbuf *ofputil_encode_packet_out(const struct ofputil_packet_out *);
+struct ofpbuf *ofputil_encode_packet_out(const struct ofputil_packet_out *,
+                                         enum ofputil_protocol protocol);
 
 enum ofputil_port_config {
     /* OpenFlow 1.0 and 1.1 share these values for these port config bits. */

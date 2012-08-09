@@ -120,18 +120,22 @@ enum ofpraw {
     /* OFPT 1.0+ (8): struct ofp_switch_config. */
     OFPRAW_OFPT_GET_CONFIG_REPLY,
 
-    /* OFPT 1.0-1.1 (9): struct ofp_switch_config. */
+    /* OFPT 1.0+ (9): struct ofp_switch_config. */
     OFPRAW_OFPT_SET_CONFIG,
 
     /* OFPT 1.0 (10): struct ofp_packet_in up to data, uint8_t[]. */
     OFPRAW_OFPT10_PACKET_IN,
     /* OFPT 1.1 (10): struct ofp11_packet_in up to data, uint8_t[]. */
     OFPRAW_OFPT11_PACKET_IN,
+    /* OFPT 1.2 (10): struct ofp12_packet_in, uint8_t[]. */
+    OFPRAW_OFPT12_PACKET_IN,
     /* NXT 1.0+ (17): struct nx_packet_in, uint8_t[]. */
     OFPRAW_NXT_PACKET_IN,
 
     /* OFPT 1.0 (11): struct ofp_flow_removed. */
     OFPRAW_OFPT10_FLOW_REMOVED,
+    /* OFPT 1.1+ (11): struct ofp11_flow_removed, uint8_t[8][]. */
+    OFPRAW_OFPT11_FLOW_REMOVED,
     /* NXT 1.0+ (14): struct nx_flow_removed, uint8_t[8][]. */
     OFPRAW_NXT_FLOW_REMOVED,
 
@@ -327,8 +331,10 @@ enum ofptype {
     /* Asynchronous messages. */
     OFPTYPE_PACKET_IN,           /* OFPRAW_OFPT10_PACKET_IN.
                                   * OFPRAW_OFPT11_PACKET_IN.
+                                  * OFPRAW_OFPT12_PACKET_IN.
                                   * OFPRAW_NXT_PACKET_IN. */
     OFPTYPE_FLOW_REMOVED,        /* OFPRAW_OFPT10_FLOW_REMOVED.
+                                  * OFPRAW_OFPT11_FLOW_REMOVED.
                                   * OFPRAW_NXT_FLOW_REMOVED. */
     OFPTYPE_PORT_STATUS,         /* OFPRAW_OFPT10_PORT_STATUS.
                                   * OFPRAW_OFPT11_PORT_STATUS. */

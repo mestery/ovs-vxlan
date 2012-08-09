@@ -267,23 +267,36 @@ ofputil_cls_rule_to_ofp10_match(const struct cls_rule *rule,
 
 enum ofperr
 ofputil_pull_ofp11_match(struct ofpbuf *buf, unsigned int priority,
-                         struct cls_rule *rule)
+                         struct cls_rule *rule, uint16_t *padded_match_len)
 {
-    struct ofp11_match_header *omh;
-    struct ofp11_match *om;
+    struct ofp11_match_header *omh = buf->data;
+    uint16_t match_len;
 
-    if (buf->size < sizeof(struct ofp11_match_header)) {
+    if (buf->size < sizeof *omh) {
         return OFPERR_OFPBMC_BAD_LEN;
     }
 
-    omh = buf->data;
+    match_len = ntohs(omh->length);
+
     switch (ntohs(omh->type)) {
-    case OFPMT_STANDARD:
-        if (omh->length != htons(sizeof *om) || buf->size < sizeof *om) {
+    case OFPMT_STANDARD: {
+        struct ofp11_match *om;
+
+        if (match_len != sizeof *om || buf->size < sizeof *om) {
             return OFPERR_OFPBMC_BAD_LEN;
         }
         om = ofpbuf_pull(buf, sizeof *om);
+        if (padded_match_len) {
+            *padded_match_len = match_len;
+        }
         return ofputil_cls_rule_from_ofp11_match(om, priority, rule);
+    }
+
+    case OFPMT_OXM:
+        if (padded_match_len) {
+            *padded_match_len = ROUND_UP(match_len, 8);
+        }
+        return oxm_pull_match(buf, priority, rule);
 
     default:
         return OFPERR_OFPBMC_BAD_TYPE;
@@ -1137,7 +1150,8 @@ ofputil_decode_flow_mod(struct ofputil_flow_mod *fm,
 
         ofm = ofpbuf_pull(&b, sizeof *ofm);
 
-        error = ofputil_pull_ofp11_match(&b, ntohs(ofm->priority), &fm->cr);
+        error = ofputil_pull_ofp11_match(&b, ntohs(ofm->priority), &fm->cr,
+                                         NULL);
         if (error) {
             return error;
         }
@@ -1468,6 +1482,23 @@ ofputil_encode_flow_stats_request(const struct ofputil_flow_stats_request *fsr,
     enum ofpraw raw;
 
     switch (protocol) {
+    case OFPUTIL_P_OF12: {
+        struct ofp11_flow_stats_request *ofsr;
+
+        raw = (fsr->aggregate
+               ? OFPRAW_OFPST_AGGREGATE_REQUEST
+               : OFPRAW_OFPST_FLOW_REQUEST);
+        msg = ofpraw_alloc(raw, OFP12_VERSION, NXM_TYPICAL_LEN);
+        ofsr = ofpbuf_put_zeros(msg, sizeof *ofsr);
+        ofsr->table_id = fsr->table_id;
+        ofsr->out_port = ofputil_port_to_ofp11(fsr->out_port);
+        ofsr->out_group = htonl(OFPG11_ANY);
+        ofsr->cookie = fsr->cookie;
+        ofsr->cookie_mask = fsr->cookie_mask;
+        oxm_put_match(msg, &fsr->match);
+        break;
+    }
+
     case OFPUTIL_P_OF10:
     case OFPUTIL_P_OF10_TID: {
         struct ofp10_flow_stats_request *ofsr;
@@ -1491,7 +1522,7 @@ ofputil_encode_flow_stats_request(const struct ofputil_flow_stats_request *fsr,
         raw = (fsr->aggregate
                ? OFPRAW_NXST_AGGREGATE_REQUEST
                : OFPRAW_NXST_FLOW_REQUEST);
-        msg = ofpraw_alloc(raw, OFP10_VERSION, 0);
+        msg = ofpraw_alloc(raw, OFP10_VERSION, NXM_TYPICAL_LEN);
         ofpbuf_put_zeros(msg, sizeof *nfsr);
         match_len = nx_put_match(msg, &fsr->match,
                                  fsr->cookie, fsr->cookie_mask);
@@ -1503,7 +1534,6 @@ ofputil_encode_flow_stats_request(const struct ofputil_flow_stats_request *fsr,
         break;
     }
 
-    case OFPUTIL_P_OF12:
     default:
         NOT_REACHED();
     }
@@ -1847,6 +1877,26 @@ ofputil_encode_flow_removed(const struct ofputil_flow_removed *fr,
     struct ofpbuf *msg;
 
     switch (protocol) {
+    case OFPUTIL_P_OF12: {
+        struct ofp12_flow_removed *ofr;
+
+        msg = ofpraw_alloc_xid(OFPRAW_OFPT11_FLOW_REMOVED,
+                               ofputil_protocol_to_ofp_version(protocol),
+                               htonl(0), NXM_TYPICAL_LEN);
+        ofr = ofpbuf_put_zeros(msg, sizeof *ofr);
+        ofr->cookie = fr->cookie;
+        ofr->priority = htons(fr->rule.priority);
+        ofr->reason = fr->reason;
+        ofr->table_id = 0;
+        ofr->duration_sec = htonl(fr->duration_sec);
+        ofr->duration_nsec = htonl(fr->duration_nsec);
+        ofr->idle_timeout = htons(fr->idle_timeout);
+        ofr->packet_count = htonll(fr->packet_count);
+        ofr->byte_count = htonll(fr->byte_count);
+        oxm_put_match(msg, &fr->rule);
+        break;
+    }
+
     case OFPUTIL_P_OF10:
     case OFPUTIL_P_OF10_TID: {
         struct ofp_flow_removed *ofr;
@@ -1889,12 +1939,31 @@ ofputil_encode_flow_removed(const struct ofputil_flow_removed *fr,
         break;
     }
 
-    case OFPUTIL_P_OF12:
     default:
         NOT_REACHED();
     }
 
     return msg;
+}
+
+static void
+ofputil_decode_packet_in_finish(struct ofputil_packet_in *pin,
+                                struct cls_rule *rule,
+                                struct ofpbuf *b)
+{
+    pin->packet = b->data;
+    pin->packet_len = b->size;
+
+    pin->fmd.in_port = rule->flow.in_port;
+
+    pin->fmd.tun_id = rule->flow.tun_id;
+    pin->fmd.tun_id_mask = rule->wc.tun_id_mask;
+
+    pin->fmd.metadata = rule->flow.metadata;
+    pin->fmd.metadata_mask = rule->wc.metadata_mask;
+
+    memcpy(pin->fmd.regs, rule->flow.regs, sizeof pin->fmd.regs);
+    memcpy(pin->fmd.reg_masks, rule->wc.reg_masks, sizeof pin->fmd.reg_masks);
 }
 
 enum ofperr
@@ -1908,7 +1977,29 @@ ofputil_decode_packet_in(struct ofputil_packet_in *pin,
 
     ofpbuf_use_const(&b, oh, ntohs(oh->length));
     raw = ofpraw_pull_assert(&b);
-    if (raw == OFPRAW_OFPT10_PACKET_IN) {
+    if (raw == OFPRAW_OFPT12_PACKET_IN) {
+        const struct ofp12_packet_in *opi;
+        struct cls_rule rule;
+        int error;
+
+        opi = ofpbuf_pull(&b, sizeof *opi);
+        error = oxm_pull_match_loose(&b, 0, &rule);
+        if (error) {
+            return error;
+        }
+
+        if (!ofpbuf_try_pull(&b, 2)) {
+            return OFPERR_OFPBRC_BAD_LEN;
+        }
+
+        pin->reason = opi->reason;
+        pin->table_id = opi->table_id;
+
+        pin->buffer_id = ntohl(opi->buffer_id);
+        pin->total_len = ntohs(opi->total_len);
+
+        ofputil_decode_packet_in_finish(pin, &rule, &b);
+    } else if (raw == OFPRAW_OFPT10_PACKET_IN) {
         const struct ofp_packet_in *opi;
 
         opi = ofpbuf_pull(&b, offsetof(struct ofp_packet_in, data));
@@ -1936,26 +2027,14 @@ ofputil_decode_packet_in(struct ofputil_packet_in *pin,
             return OFPERR_OFPBRC_BAD_LEN;
         }
 
-        pin->packet = b.data;
-        pin->packet_len = b.size;
         pin->reason = npi->reason;
         pin->table_id = npi->table_id;
         pin->cookie = npi->cookie;
 
-        pin->fmd.in_port = rule.flow.in_port;
-
-        pin->fmd.tun_id = rule.flow.tun_id;
-        pin->fmd.tun_id_mask = rule.wc.tun_id_mask;
-
-        pin->fmd.metadata = rule.flow.metadata;
-        pin->fmd.metadata_mask = rule.wc.metadata_mask;
-
-        memcpy(pin->fmd.regs, rule.flow.regs, sizeof pin->fmd.regs);
-        memcpy(pin->fmd.reg_masks, rule.wc.reg_masks,
-               sizeof pin->fmd.reg_masks);
-
         pin->buffer_id = ntohl(npi->buffer_id);
         pin->total_len = ntohs(npi->total_len);
+
+        ofputil_decode_packet_in_finish(pin, &rule, &b);
     } else {
         NOT_REACHED();
     }
@@ -1963,17 +2042,58 @@ ofputil_decode_packet_in(struct ofputil_packet_in *pin,
     return 0;
 }
 
+static void
+ofputil_packet_in_to_rule(const struct ofputil_packet_in *pin,
+                          struct cls_rule *rule)
+{
+    int i;
+
+    cls_rule_init_catchall(rule, 0);
+    cls_rule_set_tun_id_masked(rule, pin->fmd.tun_id,
+                               pin->fmd.tun_id_mask);
+    cls_rule_set_metadata_masked(rule, pin->fmd.metadata,
+                                 pin->fmd.metadata_mask);
+
+    for (i = 0; i < FLOW_N_REGS; i++) {
+        cls_rule_set_reg_masked(rule, i, pin->fmd.regs[i],
+                                pin->fmd.reg_masks[i]);
+    }
+
+    cls_rule_set_in_port(rule, pin->fmd.in_port);
+}
+
 /* Converts abstract ofputil_packet_in 'pin' into a PACKET_IN message
  * in the format specified by 'packet_in_format'.  */
 struct ofpbuf *
 ofputil_encode_packet_in(const struct ofputil_packet_in *pin,
+                         enum ofputil_protocol protocol,
                          enum nx_packet_in_format packet_in_format)
 {
     size_t send_len = MIN(pin->send_len, pin->packet_len);
     struct ofpbuf *packet;
 
     /* Add OFPT_PACKET_IN. */
-    if (packet_in_format == NXPIF_OPENFLOW10) {
+    if (protocol == OFPUTIL_P_OF12) {
+        struct ofp12_packet_in *opi;
+        struct cls_rule rule;
+
+        ofputil_packet_in_to_rule(pin, &rule);
+
+        /* The final argument is just an estimate of the space required. */
+        packet = ofpraw_alloc_xid(OFPRAW_OFPT12_PACKET_IN, OFP12_VERSION,
+                                  htonl(0), (sizeof(struct flow_metadata) * 2
+                                             + 2 + send_len));
+        ofpbuf_put_zeros(packet, sizeof *opi);
+        oxm_put_match(packet, &rule);
+        ofpbuf_put_zeros(packet, 2);
+        ofpbuf_put(packet, pin->packet, send_len);
+
+        opi = packet->l3;
+        opi->buffer_id = htonl(pin->buffer_id);
+        opi->total_len = htons(pin->total_len);
+        opi->reason = pin->reason;
+        opi->table_id = pin->table_id;
+   } else if (packet_in_format == NXPIF_OPENFLOW10) {
         struct ofp_packet_in *opi;
 
         packet = ofpraw_alloc_xid(OFPRAW_OFPT10_PACKET_IN, OFP10_VERSION,
@@ -1989,21 +2109,8 @@ ofputil_encode_packet_in(const struct ofputil_packet_in *pin,
         struct nx_packet_in *npi;
         struct cls_rule rule;
         size_t match_len;
-        size_t i;
 
-        cls_rule_init_catchall(&rule, 0);
-        cls_rule_set_tun_id_masked(&rule, pin->fmd.tun_id,
-                                   pin->fmd.tun_id_mask);
-        cls_rule_set_metadata_masked(&rule, pin->fmd.metadata,
-                                   pin->fmd.metadata_mask);
-
-
-        for (i = 0; i < FLOW_N_REGS; i++) {
-            cls_rule_set_reg_masked(&rule, i, pin->fmd.regs[i],
-                                    pin->fmd.reg_masks[i]);
-        }
-
-        cls_rule_set_in_port(&rule, pin->fmd.in_port);
+        ofputil_packet_in_to_rule(pin, &rule);
 
         /* The final argument is just an estimate of the space required. */
         packet = ofpraw_alloc_xid(OFPRAW_NXT_PACKET_IN, OFP10_VERSION,
@@ -2077,29 +2184,54 @@ ofputil_decode_packet_out(struct ofputil_packet_out *po,
                           const struct ofp_header *oh,
                           struct ofpbuf *ofpacts)
 {
-    const struct ofp_packet_out *opo;
-    enum ofperr error;
+    enum ofperr bad_in_port_err;
     enum ofpraw raw;
     struct ofpbuf b;
 
     ofpbuf_use_const(&b, oh, ntohs(oh->length));
     raw = ofpraw_pull_assert(&b);
-    assert(raw == OFPRAW_OFPT10_PACKET_OUT);
 
-    opo = ofpbuf_pull(&b, sizeof *opo);
-    po->buffer_id = ntohl(opo->buffer_id);
-    po->in_port = ntohs(opo->in_port);
+    if (raw == OFPRAW_OFPT11_PACKET_OUT) {
+        enum ofperr error;
+        const struct ofp11_packet_out *opo = ofpbuf_pull(&b, sizeof *opo);
+
+        po->buffer_id = ntohl(opo->buffer_id);
+        error = ofputil_port_from_ofp11(opo->in_port, &po->in_port);
+        if (error) {
+            return error;
+        }
+
+        error = ofpacts_pull_openflow11_actions(&b, ntohs(opo->actions_len),
+                                                ofpacts);
+        if (error) {
+            return error;
+        }
+
+        bad_in_port_err = OFPERR_OFPBMC_BAD_VALUE;
+    } else if (raw == OFPRAW_OFPT10_PACKET_OUT) {
+        enum ofperr error;
+        const struct ofp_packet_out *opo = ofpbuf_pull(&b, sizeof *opo);
+
+        po->buffer_id = ntohl(opo->buffer_id);
+        po->in_port = ntohs(opo->in_port);
+
+        error = ofpacts_pull_openflow10(&b, ntohs(opo->actions_len), ofpacts);
+        if (error) {
+            return error;
+        }
+
+        bad_in_port_err = OFPERR_NXBRC_BAD_IN_PORT;
+    } else {
+        NOT_REACHED();
+    }
+
     if (po->in_port >= OFPP_MAX && po->in_port != OFPP_LOCAL
         && po->in_port != OFPP_NONE && po->in_port != OFPP_CONTROLLER) {
         VLOG_WARN_RL(&bad_ofmsg_rl, "packet-out has bad input port %#"PRIx16,
                      po->in_port);
-        return OFPERR_NXBRC_BAD_IN_PORT;
+        return bad_in_port_err;
     }
 
-    error = ofpacts_pull_openflow10(&b, ntohs(opo->actions_len), ofpacts);
-    if (error) {
-        return error;
-    }
     po->ofpacts = ofpacts->data;
     po->ofpacts_len = ofpacts->size;
 
@@ -2971,10 +3103,10 @@ ofputil_append_flow_update(const struct ofputil_flow_update *update,
 }
 
 struct ofpbuf *
-ofputil_encode_packet_out(const struct ofputil_packet_out *po)
+ofputil_encode_packet_out(const struct ofputil_packet_out *po,
+                          enum ofputil_protocol protocol)
 {
-    struct ofp_packet_out *opo;
-    size_t actions_ofs;
+    enum ofp_version ofp_version = ofputil_protocol_to_ofp_version(protocol);
     struct ofpbuf *msg;
     size_t size;
 
@@ -2983,15 +3115,42 @@ ofputil_encode_packet_out(const struct ofputil_packet_out *po)
         size += po->packet_len;
     }
 
-    msg = ofpraw_alloc(OFPRAW_OFPT10_PACKET_OUT, OFP10_VERSION, size);
-    ofpbuf_put_zeros(msg, sizeof *opo);
-    actions_ofs = msg->size;
-    ofpacts_put_openflow10(po->ofpacts, po->ofpacts_len, msg);
+    switch (ofp_version) {
+    case OFP10_VERSION: {
+        struct ofp_packet_out *opo;
+        size_t actions_ofs;
 
-    opo = msg->l3;
-    opo->buffer_id = htonl(po->buffer_id);
-    opo->in_port = htons(po->in_port);
-    opo->actions_len = htons(msg->size - actions_ofs);
+        msg = ofpraw_alloc(OFPRAW_OFPT10_PACKET_OUT, OFP10_VERSION, size);
+        ofpbuf_put_zeros(msg, sizeof *opo);
+        actions_ofs = msg->size;
+        ofpacts_put_openflow10(po->ofpacts, po->ofpacts_len, msg);
+
+        opo = msg->l3;
+        opo->buffer_id = htonl(po->buffer_id);
+        opo->in_port = htons(po->in_port);
+        opo->actions_len = htons(msg->size - actions_ofs);
+        break;
+    }
+
+    case OFP11_VERSION:
+    case OFP12_VERSION: {
+        struct ofp11_packet_out *opo;
+        size_t len;
+
+        msg = ofpraw_alloc(OFPRAW_OFPT11_PACKET_OUT, ofp_version, size);
+        ofpbuf_put_zeros(msg, sizeof *opo);
+        len = ofpacts_put_openflow11_actions(po->ofpacts, po->ofpacts_len, msg);
+
+        opo = msg->l3;
+        opo->buffer_id = htonl(po->buffer_id);
+        opo->in_port = ofputil_port_to_ofp11(po->in_port);
+        opo->actions_len = htons(len);
+        break;
+    }
+
+    default:
+        NOT_REACHED();
+    }
 
     if (po->buffer_id == UINT32_MAX) {
         ofpbuf_put(msg, po->packet, po->packet_len);

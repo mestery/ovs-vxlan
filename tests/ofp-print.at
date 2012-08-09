@@ -327,7 +327,7 @@ OFPT_GET_CONFIG_REPLY (xid=0x3): frags=reassemble miss_send_len=255
 ])
 AT_CLEANUP
 
-AT_SETUP([OFPT_PACKET_IN])
+AT_SETUP([OFPT_PACKET_IN - OF1.0])
 AT_KEYWORDS([ofp-print])
 AT_CHECK([ovs-ofctl ofp-print "\
 01 0a 00 4e 00 00 00 00 00 00 01 11 00 3c 00 03 \
@@ -338,6 +338,20 @@ c0 a8 00 02 27 2f 00 00 78 50 cc 5b 57 af 42 1e \
 "], [0], [dnl
 OFPT_PACKET_IN (xid=0x0): total_len=60 in_port=3 (via no_match) data_len=60 buffer=0x00000111
 priority:0,tunnel:0,metadata:0,in_port:0000,tci(0) mac(50:54:00:00:00:05->50:54:00:00:00:06) type:0800 proto:6 tos:0 ttl:64 ip(192.168.0.1->192.168.0.2) port(10031->0) tcp_csum:26e8
+])
+AT_CLEANUP
+
+AT_SETUP([OFPT_PACKET_IN - OF1.2])
+AT_KEYWORDS([ofp-print])
+AT_CHECK([ovs-ofctl ofp-print "\
+03 0a 00 4c 00 00 00 00 ff ff ff 00 00 2a 00 00 \
+00 01 00 0c 80 00 00 04 ff ff ff fe 00 00 00 00 \
+00 00 ff ff ff ff ff ff 00 23 20 83 c1 5f 80 35 \
+00 01 08 00 06 04 00 03 00 23 20 83 c1 5f 00 00 \
+00 00 00 23 20 83 c1 5f 00 00 00 00 \
+"], [0], [dnl
+OFPT_PACKET_IN (OF1.2) (xid=0x0): total_len=42 in_port=LOCAL (via no_match) data_len=42 buffer=0xffffff00
+priority:0,tunnel:0,metadata:0,in_port:0000,tci(0) mac(00:23:20:83:c1:5f->ff:ff:ff:ff:ff:ff) type:8035 proto:0 tos:0 ttl:0 ip(0.0.0.0->0.0.0.0)
 ])
 AT_CLEANUP
 
@@ -392,7 +406,7 @@ OFPT_PORT_STATUS (OF1.1) (xid=0x0): MOD: 3(eth0): addr:50:54:00:00:00:01
 ])
 AT_CLEANUP
 
-AT_SETUP([OFPT_PACKET_OUT])
+AT_SETUP([OFPT_PACKET_OUT - OF1.0])
 AT_KEYWORDS([ofp-print])
 AT_CHECK([ovs-ofctl ofp-print "\
 01 0d 00 54 00 00 00 00 00 00 01 14 00 01 00 08 \
@@ -406,8 +420,19 @@ OFPT_PACKET_OUT (xid=0x0): in_port=1 actions=output:3 buffer=0x00000114
 ])
 AT_CLEANUP
 
+AT_SETUP([OFPT_PACKET_OUT - OF1.1])
+AT_KEYWORDS([ofp-print])
+AT_CHECK([ovs-ofctl ofp-print "\
+03 0d 00 28 88 58 df c5 ff ff ff 00 ff ff ff fe \
+00 10 00 00 00 00 00 00 00 00 00 10 ff ff ff fb \
+05 dc 00 00 00 00 00 00 \
+"], [0], [dnl
+OFPT_PACKET_OUT (OF1.2) (xid=0x8858dfc5): in_port=LOCAL actions=FLOOD buffer=0xffffff00
+])
+AT_CLEANUP
+
 # The flow is formatted with cls_rule_format() for the low-verbosity case.
-AT_SETUP([OFPT_FLOW_MOD - low verbosity])
+AT_SETUP([OFPT_FLOW_MOD - OF1.0 - low verbosity])
 AT_KEYWORDS([ofp-print])
 AT_CHECK([ovs-ofctl '-vPATTERN:console:%c|%p|%m' ofp-print "\
 01 0e 00 50 00 00 00 00 00 00 00 00 00 01 50 54 \
@@ -424,9 +449,28 @@ ofp_util|INFO|post: priority=65535,arp,in_port=1,vlan_tci=0x0000,dl_src=50:54:00
 ])
 AT_CLEANUP
 
+# The flow is formatted with cls_rule_format() for the low-verbosity case.
+AT_SETUP([OFPT_FLOW_MOD - OF1.2 - low verbosity])
+AT_KEYWORDS([ofp-print])
+AT_CHECK([ovs-ofctl '-vPATTERN:console:%c|%p|%m' ofp-print "\
+03 0e 00 90 00 00 00 02 00 00 00 00 00 00 00 00 \
+00 00 00 00 00 00 00 00 ff 00 00 00 00 00 ff ff \
+ff ff ff ff ff ff ff ff ff ff ff ff 00 00 00 00 \
+00 01 00 42 80 00 00 04 00 00 00 01 80 00 08 06 \
+50 54 00 00 00 06 80 00 06 06 50 54 00 00 00 05 \
+80 00 0a 02 08 06 80 00 0c 02 00 00 80 00 2a 02 \
+00 02 80 00 2c 04 c0 a8 00 02 80 00 2e 04 c0 a8 \
+00 01 00 00 00 00 00 00 00 04 00 18 00 00 00 00 \
+00 00 00 10 00 00 00 03 00 00 00 00 00 00 00 00 \
+" 2], [0], [dnl
+OFPT_FLOW_MOD (OF1.2) (xid=0x2): ADD table:255 priority=65535,arp,in_port=1,vlan_tci=0x0000/0x1fff,dl_src=50:54:00:00:00:06,dl_dst=50:54:00:00:00:05,nw_src=192.168.0.2,nw_dst=192.168.0.1,arp_op=2 actions=output:3
+], [dnl
+])
+AT_CLEANUP
+
 # The flow is formatted with ofp10_match_to_string() for the
 # high-verbosity case.
-AT_SETUP([OFPT_FLOW_MOD - high verbosity])
+AT_SETUP([OFPT_FLOW_MOD - OF1.0 - high verbosity])
 AT_KEYWORDS([ofp-print])
 AT_CHECK([ovs-ofctl '-vPATTERN:console:%c|%p|%m' ofp-print "\
 01 0e 00 50 00 00 00 00 00 00 00 00 00 01 50 54 \
@@ -440,6 +484,25 @@ OFPT_FLOW_MOD (xid=0x0): ADD arp,in_port=1,dl_vlan=65535,dl_vlan_pcp=0,dl_src=50
 ofp_util|INFO|normalization changed ofp_match, details:
 ofp_util|INFO| pre: priority=65535,arp,in_port=1,vlan_tci=0x0000,dl_src=50:54:00:00:00:06,dl_dst=50:54:00:00:00:05,nw_src=192.168.0.2,nw_dst=192.168.0.1,arp_op=2,nw_tos=0,tp_src=0,tp_dst=0
 ofp_util|INFO|post: priority=65535,arp,in_port=1,vlan_tci=0x0000,dl_src=50:54:00:00:00:06,dl_dst=50:54:00:00:00:05,nw_src=192.168.0.2,nw_dst=192.168.0.1,arp_op=2
+])
+AT_CLEANUP
+
+# The flow is formatted with cls_rule_format() for the low-verbosity case.
+AT_SETUP([OFPT_FLOW_MOD - OF1.2 - low verbosity])
+AT_KEYWORDS([ofp-print])
+AT_CHECK([ovs-ofctl '-vPATTERN:console:%c|%p|%m' ofp-print "\
+03 0e 00 90 00 00 00 02 00 00 00 00 00 00 00 00 \
+00 00 00 00 00 00 00 00 ff 00 00 00 00 00 ff ff \
+ff ff ff ff ff ff ff ff ff ff ff ff 00 00 00 00 \
+00 01 00 42 80 00 00 04 00 00 00 01 80 00 08 06 \
+50 54 00 00 00 06 80 00 06 06 50 54 00 00 00 05 \
+80 00 0a 02 08 06 80 00 0c 02 00 00 80 00 2a 02 \
+00 02 80 00 2c 04 c0 a8 00 02 80 00 2e 04 c0 a8 \
+00 01 00 00 00 00 00 00 00 04 00 18 00 00 00 00 \
+00 00 00 10 00 00 00 03 00 00 00 00 00 00 00 00 \
+" 2], [0], [dnl
+OFPT_FLOW_MOD (OF1.2) (xid=0x2): ADD table:255 priority=65535,arp,in_port=1,vlan_tci=0x0000/0x1fff,dl_src=50:54:00:00:00:06,dl_dst=50:54:00:00:00:05,nw_src=192.168.0.2,nw_dst=192.168.0.1,arp_op=2 actions=output:3
+], [dnl
 ])
 AT_CLEANUP
 
