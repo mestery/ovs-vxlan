@@ -1453,7 +1453,7 @@ ofputil_decode_flow_stats_request(struct ofputil_flow_stats_request *fsr,
     ofpbuf_use_const(&b, oh, ntohs(oh->length));
     raw = ofpraw_pull_assert(&b);
     switch ((int) raw) {
-    case OFPRAW_OFPST_FLOW_REQUEST:
+    case OFPRAW_OFPST10_FLOW_REQUEST:
         return ofputil_decode_ofpst_flow_request(fsr, b.data, false);
 
     case OFPRAW_OFPST_AGGREGATE_REQUEST:
@@ -1487,7 +1487,7 @@ ofputil_encode_flow_stats_request(const struct ofputil_flow_stats_request *fsr,
 
         raw = (fsr->aggregate
                ? OFPRAW_OFPST_AGGREGATE_REQUEST
-               : OFPRAW_OFPST_FLOW_REQUEST);
+               : OFPRAW_OFPST11_FLOW_REQUEST);
         msg = ofpraw_alloc(raw, OFP12_VERSION, NXM_TYPICAL_LEN);
         ofsr = ofpbuf_put_zeros(msg, sizeof *ofsr);
         ofsr->table_id = fsr->table_id;
@@ -1505,7 +1505,7 @@ ofputil_encode_flow_stats_request(const struct ofputil_flow_stats_request *fsr,
 
         raw = (fsr->aggregate
                ? OFPRAW_OFPST_AGGREGATE_REQUEST
-               : OFPRAW_OFPST_FLOW_REQUEST);
+               : OFPRAW_OFPST10_FLOW_REQUEST);
         msg = ofpraw_alloc(raw, OFP10_VERSION, 0);
         ofsr = ofpbuf_put_zeros(msg, sizeof *ofsr);
         ofputil_cls_rule_to_ofp10_match(&fsr->match, &ofsr->match);
@@ -1596,7 +1596,48 @@ ofputil_decode_flow_stats_reply(struct ofputil_flow_stats *fs,
 
     if (!msg->size) {
         return EOF;
-    } else if (raw == OFPRAW_OFPST_FLOW_REPLY) {
+    } else if (raw == OFPRAW_OFPST11_FLOW_REPLY) {
+        const struct ofp11_flow_stats *ofs;
+        size_t length;
+        uint16_t padded_match_len;
+
+        ofs = ofpbuf_try_pull(msg, sizeof *ofs);
+        if (!ofs) {
+            VLOG_WARN_RL(&bad_ofmsg_rl, "OFPST_FLOW reply has %zu leftover "
+                         "bytes at end", msg->size);
+            return EINVAL;
+        }
+
+        length = ntohs(ofs->length);
+        if (length < sizeof *ofs) {
+            VLOG_WARN_RL(&bad_ofmsg_rl, "OFPST_FLOW reply claims invalid "
+                         "length %zu", length);
+            return EINVAL;
+        }
+
+        if (ofputil_pull_ofp11_match(msg, ntohs(ofs->priority), &fs->rule,
+                                     &padded_match_len)) {
+            VLOG_WARN_RL(&bad_ofmsg_rl, "OFPST_FLOW reply bad match");
+            return EINVAL;
+        }
+
+        if (ofpacts_pull_openflow11_instructions(msg, length - sizeof *ofs -
+                                                 padded_match_len, ofpacts)) {
+            VLOG_WARN_RL(&bad_ofmsg_rl, "OFPST_FLOW reply bad instructions");
+            return EINVAL;
+        }
+
+        fs->table_id = ofs->table_id;
+        fs->duration_sec = ntohl(ofs->duration_sec);
+        fs->duration_nsec = ntohl(ofs->duration_nsec);
+        fs->idle_timeout = ntohs(ofs->idle_timeout);
+        fs->hard_timeout = ntohs(ofs->hard_timeout);
+        fs->idle_age = -1;
+        fs->hard_age = -1;
+        fs->cookie = ofs->cookie;
+        fs->packet_count = ntohll(ofs->packet_count);
+        fs->byte_count = ntohll(ofs->byte_count);
+    } else if (raw == OFPRAW_OFPST10_FLOW_REPLY) {
         const struct ofp10_flow_stats *ofs;
         size_t length;
 
@@ -1708,7 +1749,28 @@ ofputil_append_flow_stats_reply(const struct ofputil_flow_stats *fs,
     enum ofpraw raw;
 
     ofpraw_decode_partial(&raw, reply->data, reply->size);
-    if (raw == OFPRAW_OFPST_FLOW_REPLY) {
+    if (raw == OFPRAW_OFPST11_FLOW_REPLY) {
+        struct ofp11_flow_stats *ofs;
+
+        ofpbuf_put_uninit(reply, sizeof *ofs);
+        oxm_put_match(reply, &fs->rule);
+        ofpacts_put_openflow11_instructions(fs->ofpacts, fs->ofpacts_len,
+                                            reply);
+
+        ofs = ofpbuf_at_assert(reply, start_ofs, sizeof *ofs);
+        ofs->length = htons(reply->size - start_ofs);
+        ofs->table_id = fs->table_id;
+        ofs->pad = 0;
+        ofs->duration_sec = htonl(fs->duration_sec);
+        ofs->duration_nsec = htonl(fs->duration_nsec);
+        ofs->priority = htons(fs->rule.priority);
+        ofs->idle_timeout = htons(fs->idle_timeout);
+        ofs->hard_timeout = htons(fs->hard_timeout);
+        memset(ofs->pad2, 0, sizeof ofs->pad2);
+        ofs->cookie = fs->cookie;
+        ofs->packet_count = htonll(unknown_to_zero(fs->packet_count));
+        ofs->byte_count = htonll(unknown_to_zero(fs->byte_count));
+    } else if (raw == OFPRAW_OFPST10_FLOW_REPLY) {
         struct ofp10_flow_stats *ofs;
 
         ofpbuf_put_uninit(reply, sizeof *ofs);
@@ -1825,7 +1887,28 @@ ofputil_decode_flow_removed(struct ofputil_flow_removed *fr,
 
     ofpbuf_use_const(&b, oh, ntohs(oh->length));
     raw = ofpraw_pull_assert(&b);
-    if (raw == OFPRAW_OFPT10_FLOW_REMOVED) {
+    if (raw == OFPRAW_OFPT11_FLOW_REMOVED) {
+        const struct ofp12_flow_removed *ofr;
+        enum ofperr error;
+
+        ofr = ofpbuf_pull(&b, sizeof *ofr);
+
+        error = ofputil_pull_ofp11_match(&b, ntohs(ofr->priority),
+                                         &fr->rule, NULL);
+        if (error) {
+            return error;
+        }
+
+        fr->cookie = ofr->cookie;
+        fr->reason = ofr->reason;
+        /* XXX: ofr->table_id is ignored */
+        fr->duration_sec = ntohl(ofr->duration_sec);
+        fr->duration_nsec = ntohl(ofr->duration_nsec);
+        fr->idle_timeout = ntohs(ofr->idle_timeout);
+        fr->hard_timeout = ntohs(ofr->hard_timeout);
+        fr->packet_count = ntohll(ofr->packet_count);
+        fr->byte_count = ntohll(ofr->byte_count);
+    } else if (raw == OFPRAW_OFPT10_FLOW_REMOVED) {
         const struct ofp_flow_removed *ofr;
 
         ofr = ofpbuf_pull(&b, sizeof *ofr);
@@ -1837,6 +1920,7 @@ ofputil_decode_flow_removed(struct ofputil_flow_removed *fr,
         fr->duration_sec = ntohl(ofr->duration_sec);
         fr->duration_nsec = ntohl(ofr->duration_nsec);
         fr->idle_timeout = ntohs(ofr->idle_timeout);
+        fr->hard_timeout = 0;
         fr->packet_count = ntohll(ofr->packet_count);
         fr->byte_count = ntohll(ofr->byte_count);
     } else if (raw == OFPRAW_NXT_FLOW_REMOVED) {
@@ -1858,6 +1942,7 @@ ofputil_decode_flow_removed(struct ofputil_flow_removed *fr,
         fr->duration_sec = ntohl(nfr->duration_sec);
         fr->duration_nsec = ntohl(nfr->duration_nsec);
         fr->idle_timeout = ntohs(nfr->idle_timeout);
+        fr->hard_timeout = 0;
         fr->packet_count = ntohll(nfr->packet_count);
         fr->byte_count = ntohll(nfr->byte_count);
     } else {
@@ -1891,6 +1976,7 @@ ofputil_encode_flow_removed(const struct ofputil_flow_removed *fr,
         ofr->duration_sec = htonl(fr->duration_sec);
         ofr->duration_nsec = htonl(fr->duration_nsec);
         ofr->idle_timeout = htons(fr->idle_timeout);
+        ofr->hard_timeout = htons(fr->hard_timeout);
         ofr->packet_count = htonll(fr->packet_count);
         ofr->byte_count = htonll(fr->byte_count);
         oxm_put_match(msg, &fr->rule);
@@ -2822,12 +2908,13 @@ ofputil_encode_port_mod(const struct ofputil_port_mod *pm,
         break;
     }
 
-    case OFP11_VERSION: {
+    case OFP11_VERSION:
+    case OFP12_VERSION: {
         struct ofp11_port_mod *opm;
 
         b = ofpraw_alloc(OFPRAW_OFPT11_PORT_MOD, ofp_version, 0);
         opm = ofpbuf_put_zeros(b, sizeof *opm);
-        opm->port_no = htonl(pm->port_no);
+        opm->port_no = ofputil_port_to_ofp11(pm->port_no);
         memcpy(opm->hw_addr, pm->hw_addr, ETH_ADDR_LEN);
         opm->config = htonl(pm->config & OFPPC11_ALL);
         opm->mask = htonl(pm->mask & OFPPC11_ALL);
@@ -2835,7 +2922,6 @@ ofputil_encode_port_mod(const struct ofputil_port_mod *pm,
         break;
     }
 
-    case OFP12_VERSION:
     default:
         NOT_REACHED();
     }

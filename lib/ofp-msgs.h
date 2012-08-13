@@ -158,7 +158,7 @@ enum ofpraw {
 
     /* OFPT 1.0 (15): struct ofp10_port_mod. */
     OFPRAW_OFPT10_PORT_MOD,
-    /* OFPT 1.1 (16): struct ofp11_port_mod. */
+    /* OFPT 1.1+ (16): struct ofp11_port_mod. */
     OFPRAW_OFPT11_PORT_MOD,
 
     /* OFPT 1.0 (18): void. */
@@ -180,12 +180,16 @@ enum ofpraw {
     OFPRAW_OFPST_DESC_REPLY,
 
     /* OFPST 1.0 (1): struct ofp10_flow_stats_request. */
-    OFPRAW_OFPST_FLOW_REQUEST,
+    OFPRAW_OFPST10_FLOW_REQUEST,
+    /* OFPST 1.1+ (1): struct ofp11_flow_stats_request, uint8_t[8][]. */
+    OFPRAW_OFPST11_FLOW_REQUEST,
     /* NXST 1.0 (0): struct nx_flow_stats_request, uint8_t[8][]. */
     OFPRAW_NXST_FLOW_REQUEST,
 
     /* OFPST 1.0 (1): uint8_t[]. */
-    OFPRAW_OFPST_FLOW_REPLY,
+    OFPRAW_OFPST10_FLOW_REPLY,
+    /* OFPST 1.1+ (1): uint8_t[]. */
+    OFPRAW_OFPST11_FLOW_REPLY,
     /* NXST 1.0 (0): uint8_t[]. */
     OFPRAW_NXST_FLOW_REPLY,
 
@@ -199,11 +203,15 @@ enum ofpraw {
     /* NXST 1.0 (1): struct ofp_aggregate_stats_reply. */
     OFPRAW_NXST_AGGREGATE_REPLY,
 
-    /* OFPST 1.0 (3): void. */
+    /* OFPST 1.0-1.2 (3): void. */
     OFPRAW_OFPST_TABLE_REQUEST,
 
     /* OFPST 1.0 (3): struct ofp10_table_stats[]. */
-    OFPRAW_OFPST_TABLE_REPLY,
+    OFPRAW_OFPST10_TABLE_REPLY,
+    /* OFPST 1.1 (3): struct ofp11_table_stats[]. */
+    OFPRAW_OFPST11_TABLE_REPLY,
+    /* OFPST 1.2 (3): struct ofp12_table_stats[]. */
+    OFPRAW_OFPST12_TABLE_REPLY,
 
     /* OFPST 1.0 (4): struct ofp10_port_stats_request. */
     OFPRAW_OFPST_PORT_REQUEST,
@@ -357,16 +365,20 @@ enum ofptype {
     /* Statistics. */
     OFPTYPE_DESC_STATS_REQUEST,      /* OFPRAW_OFPST_DESC_REQUEST. */
     OFPTYPE_DESC_STATS_REPLY,        /* OFPRAW_OFPST_DESC_REPLY. */
-    OFPTYPE_FLOW_STATS_REQUEST,      /* OFPRAW_OFPST_FLOW_REQUEST.
+    OFPTYPE_FLOW_STATS_REQUEST,      /* OFPRAW_OFPST10_FLOW_REQUEST.
+                                      * OFPRAW_OFPST11_FLOW_REQUEST.
                                       * OFPRAW_NXST_FLOW_REQUEST. */
-    OFPTYPE_FLOW_STATS_REPLY,        /* OFPRAW_OFPST_FLOW_REPLY.
+    OFPTYPE_FLOW_STATS_REPLY,        /* OFPRAW_OFPST10_FLOW_REPLY.
+                                      * OFPRAW_OFPST11_FLOW_REPLY.
                                       * OFPRAW_NXST_FLOW_REPLY. */
     OFPTYPE_AGGREGATE_STATS_REQUEST, /* OFPRAW_OFPST_AGGREGATE_REQUEST.
                                       * OFPRAW_NXST_AGGREGATE_REQUEST. */
     OFPTYPE_AGGREGATE_STATS_REPLY,   /* OFPRAW_OFPST_AGGREGATE_REPLY.
                                       * OFPRAW_NXST_AGGREGATE_REPLY. */
     OFPTYPE_TABLE_STATS_REQUEST,     /* OFPRAW_OFPST_TABLE_REQUEST. */
-    OFPTYPE_TABLE_STATS_REPLY,       /* OFPRAW_OFPST_TABLE_REPLY. */
+    OFPTYPE_TABLE_STATS_REPLY,       /* OFPRAW_OFPST10_TABLE_REPLY.
+                                      * OFPRAW_OFPST11_TABLE_REPLY.
+                                      * OFPRAW_OFPST12_TABLE_REPLY. */
     OFPTYPE_PORT_STATS_REQUEST,      /* OFPRAW_OFPST_PORT_REQUEST. */
     OFPTYPE_PORT_STATS_REPLY,        /* OFPRAW_OFPST_PORT_REPLY. */
     OFPTYPE_QUEUE_STATS_REQUEST,     /* OFPRAW_OFPST_QUEUE_REQUEST. */

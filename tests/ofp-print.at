@@ -355,7 +355,7 @@ priority:0,tunnel:0,metadata:0,in_port:0000,tci(0) mac(00:23:20:83:c1:5f->ff:ff:
 ])
 AT_CLEANUP
 
-AT_SETUP([OFPT_FLOW_REMOVED])
+AT_SETUP([OFPT_FLOW_REMOVED - OF1.0])
 AT_KEYWORDS([ofp-print])
 AT_CHECK([ovs-ofctl ofp-print "\
 01 0b 00 58 00 00 00 00 00 00 00 00 00 03 50 54 \
@@ -366,6 +366,17 @@ AT_CHECK([ovs-ofctl ofp-print "\
 00 00 00 00 00 00 00 3c \
 "], [0], [dnl
 OFPT_FLOW_REMOVED (xid=0x0): priority=65535,arp,in_port=3,vlan_tci=0x0000,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:06,nw_src=192.168.0.1,nw_dst=192.168.0.2,arp_op=2,nw_tos=0,tp_src=0,tp_dst=0 reason=idle duration5.82s idle5 pkts1 bytes60
+])
+AT_CLEANUP
+
+AT_SETUP([OFPT_FLOW_REMOVED - OF1.2])
+AT_KEYWORDS([ofp-print])
+AT_CHECK([ovs-ofctl ofp-print "\
+03 0b 00 40 00 00 00 00 fe dc ba 98 76 54 32 10 \
+80 00 01 05 00 00 00 01 00 98 96 80 00 3c 00 78 \
+00 00 00 00 00 12 d6 87 00 00 00 00 6f 68 ba 66 \
+00 01 00 0a 80 00 0c 02 10 09 00 00 00 00 00 00"], [0], [dnl
+OFPT_FLOW_REMOVED (OF1.2) (xid=0x0): dl_vlan=9 reason=hard cookie:0xfedcba9876543210 duration1.01s idle60 hard120 pkts1234567 bytes1869134438
 ])
 AT_CLEANUP
 
@@ -533,6 +544,20 @@ OFPT_PORT_MOD (OF1.1) (xid=0x3):port: 3: addr:50:54:00:00:00:01
 ])
 AT_CLEANUP
 
+AT_SETUP([OFPT_PORT_MOD - OF1.2])
+AT_KEYWORDS([ofp-print])
+AT_CHECK([ovs-ofctl ofp-print "\
+03 10 00 28 00 00 00 03 00 00 00 03 00 00 00 00 \
+50 54 00 00 00 01 00 00 00 00 00 01 00 00 00 01 \
+00 00 00 00 00 00 00 00 \
+" 3], [0], [dnl
+OFPT_PORT_MOD (OF1.2) (xid=0x3):port: 3: addr:50:54:00:00:00:01
+     config: PORT_DOWN
+     mask:   PORT_DOWN
+     advertise: UNCHANGED
+])
+AT_CLEANUP
+
 AT_SETUP([OFPST_DESC request])
 AT_KEYWORDS([ofp-print OFPT_STATS_REQUEST])
 AT_CHECK([ovs-ofctl ofp-print "0110000c0000000100000000"], [0], [dnl
@@ -632,7 +657,7 @@ OFPST_FLOW request (xid=0x4): @&t@
 ])
 AT_CLEANUP
 
-AT_SETUP([OFPST_FLOW reply])
+AT_SETUP([OFPST_FLOW reply - OF1.0])
 AT_KEYWORDS([ofp-print OFPT_STATS_REPLY])
 AT_CHECK([ovs-ofctl ofp-print "\
 01 11 01 e4 00 00 00 04 00 01 00 00 00 60 00 00 \
@@ -676,6 +701,41 @@ OFPST_FLOW reply (xid=0x4):
 ])
 AT_CLEANUP
 
+AT_SETUP([OFPST_FLOW reply - OF1.2])
+AT_KEYWORDS([ofp-print OFPT_STATS_REPLY])
+AT_CHECK([ovs-ofctl ofp-print "\
+03 13 01 78 00 00 00 02 00 01 00 00 00 00 00 00 \
+00 78 00 00 00 00 00 03 01 5e f3 c0 80 00 00 00 \
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 \
+00 00 00 00 00 00 00 01 00 00 00 00 00 00 00 62 \
+00 01 00 2d 80 00 00 04 00 00 00 02 80 00 06 06 \
+ca da ad d6 0d 37 80 00 0a 02 08 00 80 00 10 01 \
+00 80 00 04 08 00 00 00 00 00 00 00 00 00 00 00 \
+00 04 00 18 00 00 00 00 00 00 00 10 00 00 00 02 \
+05 dc 00 00 00 00 00 00 00 78 00 00 00 00 00 04 \
+20 7c 0a 40 80 00 00 00 00 00 00 00 00 00 00 00 \
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 02 \
+00 00 00 00 00 00 00 8c 00 01 00 2d 80 00 00 04 \
+00 00 00 02 80 00 06 06 52 54 00 c3 00 89 80 00 \
+0a 02 08 00 80 00 10 01 00 80 00 04 08 00 00 00 \
+00 00 00 00 00 00 00 00 00 04 00 18 00 00 00 00 \
+00 00 00 10 00 00 00 02 05 dc 00 00 00 00 00 00 \
+00 78 00 00 00 00 00 04 20 a9 d1 00 80 00 00 00 \
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 \
+00 00 00 00 00 00 00 01 00 00 00 00 00 00 00 2a \
+00 01 00 2d 80 00 00 04 00 00 00 02 80 00 06 06 \
+52 54 00 97 00 69 80 00 0a 02 08 00 80 00 10 01 \
+00 80 00 04 08 00 00 00 00 00 00 00 00 00 00 00 \
+00 04 00 18 00 00 00 00 00 00 00 10 00 00 00 02 \
+05 dc 00 00 00 00 00 00 \
+"], [0], [dnl
+OFPST_FLOW reply (OF1.2) (xid=0x2):
+ cookie=0x0, duration=3.023s, table=0, n_packets=1, n_bytes=98, ip,metadata=0,in_port=2,dl_dst=ca:da:ad:d6:0d:37,nw_tos=0 actions=output:2
+ cookie=0x0, duration=4.545s, table=0, n_packets=2, n_bytes=140, ip,metadata=0,in_port=2,dl_dst=52:54:00:c3:00:89,nw_tos=0 actions=output:2
+ cookie=0x0, duration=4.548s, table=0, n_packets=1, n_bytes=42, ip,metadata=0,in_port=2,dl_dst=52:54:00:97:00:69,nw_tos=0 actions=output:2
+])
+AT_CLEANUP
+
 AT_SETUP([OFPST_AGGREGATE request])
 AT_KEYWORDS([ofp-print OFPT_STATS_REQUEST])
 AT_CHECK([ovs-ofctl ofp-print "\
@@ -706,7 +766,7 @@ OFPST_TABLE request (xid=0x1):
 ])
 AT_CLEANUP
 
-AT_SETUP([OFPST_TABLE reply])
+AT_SETUP([OFPST_TABLE reply - OF1.0])
 AT_KEYWORDS([ofp-print OFPT_STATS_REPLY])
 AT_CHECK([ovs-ofctl ofp-print "\
 01 11 00 4c 00 00 00 01 00 03 00 00 00 00 00 00 \
@@ -719,6 +779,61 @@ OFPST_TABLE reply (xid=0x1): 1 tables
   0: classifier: wild=0x3fffff, max=1048576, active=11
                lookup=0, matched=0
 ])
+AT_CLEANUP
+
+AT_SETUP([OFPST_TABLE reply - OF1.2])
+AT_KEYWORDS([ofp-print OFPT_STATS_REPLY])
+(mid="wild=0xfffffffff, max=1000000,"
+ tail="
+               match=0xfffffffff, instructions=0x00000007, config=0x00000000
+               write_actions=0x00000000, apply_actions=0x00000000
+               write_setfields=0x0000000fffffffff
+               apply_setfields=0x0000000fffffffff
+               metadata_match=0x0000000000000000
+               metadata_write=0x0000000000000000"
+ echo "OFPST_TABLE reply (OF1.2) (xid=0x2): 255 tables
+  0: classifier: $mid active=1
+               lookup=74614, matched=106024$tail"
+ x=1
+ while test $x -lt 254; do
+   printf "  %d: %-8s: $mid active=0
+               lookup=0, matched=0$tail
+" $x table$x
+   x=`expr $x + 1`
+ done
+ echo "  254: table254: $mid active=2
+               lookup=0, matched=0$tail") > expout
+
+(pad32="\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+ pad7="00 00 00 00 00 00 00 "
+ mid="00 00 00 0f ff ff ff ff \
+00 00 00 0f ff ff ff ff 00 00 00 00 00 00 00 00 \
+00 00 00 0f ff ff ff ff 00 00 00 0f ff ff ff ff \
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 \
+00 00 00 07 00 00 00 00 00 0f 42 40 "
+ tail="00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
+
+ echo -n "03 13 7f 90 00 00 00 02 00 03 00 00 00 00 00 00 "
+
+ x=0
+ printf "%02x $pad7" $x
+ printf "%s$pad32" "classifier" | od -A n -t x1 -v -N 32 | tr '\n' ' '
+ echo -n "$mid 00 00 00 01  "
+ echo -n "00 00 00 00 00 01 23 76 00 00 00 00 00 01 9e 28 "
+
+ x=1
+ while test $x -lt 254; do
+   printf "%02x $pad7" $x
+   printf "%s$pad32" "table$x" | od -A n -t x1 -v -N 32 | tr '\n' ' '
+   echo -n "$mid 00 00 00 00 $tail "
+   x=`expr $x + 1`
+ done
+
+ x=254
+ printf "%02x $pad7" $x
+ printf "%s$pad32" "table$x" | od -A n -t x1 -v -N 32 | tr '\n' ' '
+ echo -n "$mid 00 00 00 02 $tail") > in
+AT_CHECK([ovs-ofctl ofp-print "$(cat in)"], [0], [expout])
 AT_CLEANUP
 
 AT_SETUP([OFPST_PORT request])
