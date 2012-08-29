@@ -220,7 +220,7 @@ static struct sk_buff *capwap_update_header(const struct vport *vport,
 		struct capwaphdr_wsi *wsi = (struct capwaphdr_wsi *)(cwh + 1);
 		struct capwaphdr_wsi_key *opt = (struct capwaphdr_wsi_key *)(wsi + 1);
 
-		opt->key = OVS_CB(skb)->tun_id;
+		opt->key = OVS_CB(skb)->tun_key->tun_id;
 	}
 
 	udph->len = htons(skb->len - skb_transport_offset(skb));
@@ -316,6 +316,7 @@ static int capwap_rcv(struct sock *sk, struct sk_buff *skb)
 	struct vport *vport;
 	const struct tnl_mutable_config *mutable;
 	struct iphdr *iph;
+	struct ovs_key_ipv4_tunnel tun_key;
 	__be64 key = 0;
 
 	if (unlikely(!pskb_may_pull(skb, CAPWAP_MIN_HLEN + ETH_HLEN)))
@@ -333,12 +334,11 @@ static int capwap_rcv(struct sock *sk, struct sk_buff *skb)
 		goto error;
 	}
 
-	if (mutable->flags & TNL_F_IN_KEY_MATCH)
-		OVS_CB(skb)->tun_id = key;
-	else
-		OVS_CB(skb)->tun_id = 0;
+	tnl_tun_key_init(&tun_key, iph,
+		     mutable->flags & TNL_F_IN_KEY_MATCH ? key : 0);
+	OVS_CB(skb)->tun_key = &tun_key;
 
-	ovs_tnl_rcv(vport, skb, iph->tos);
+	ovs_tnl_rcv(vport, skb);
 	goto out;
 
 error:

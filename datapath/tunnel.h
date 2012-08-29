@@ -269,14 +269,14 @@ int ovs_tnl_set_addr(struct vport *vport, const unsigned char *addr);
 const char *ovs_tnl_get_name(const struct vport *vport);
 const unsigned char *ovs_tnl_get_addr(const struct vport *vport);
 int ovs_tnl_send(struct vport *vport, struct sk_buff *skb);
-void ovs_tnl_rcv(struct vport *vport, struct sk_buff *skb, u8 tos);
+void ovs_tnl_rcv(struct vport *vport, struct sk_buff *skb);
 
 struct vport *ovs_tnl_find_port(struct net *net, __be32 saddr, __be32 daddr,
 				__be64 key, int tunnel_type,
 				const struct tnl_mutable_config **mutable);
 bool ovs_tnl_frag_needed(struct vport *vport,
 			 const struct tnl_mutable_config *mutable,
-			 struct sk_buff *skb, unsigned int mtu, __be64 flow_key);
+			 struct sk_buff *skb, unsigned int mtu);
 void ovs_tnl_free_linked_skbs(struct sk_buff *skb);
 
 int ovs_tnl_init(void);
@@ -284,6 +284,16 @@ void ovs_tnl_exit(void);
 static inline struct tnl_vport *tnl_vport_priv(const struct vport *vport)
 {
 	return vport_priv(vport);
+}
+
+static inline void tnl_tun_key_init(struct ovs_key_ipv4_tunnel *tun_key,
+				    const struct iphdr *iph, __be64 tun_id)
+{
+	tun_key->tun_id = tun_id;
+	tun_key->ipv4_src = iph->saddr;
+	tun_key->ipv4_dst = iph->daddr;
+	tun_key->ipv4_tos = iph->tos;
+	tun_key->ipv4_ttl = iph->ttl;
 }
 
 #endif /* tunnel.h */

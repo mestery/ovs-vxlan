@@ -333,7 +333,8 @@ static int sample(struct datapath *dp, struct sk_buff *skb,
 }
 
 static int execute_set_action(struct sk_buff *skb,
-				 const struct nlattr *nested_attr)
+				 const struct nlattr *nested_attr,
+				 struct ovs_key_ipv4_tunnel *tun_key)
 {
 	int err = 0;
 
@@ -343,7 +344,21 @@ static int execute_set_action(struct sk_buff *skb,
 		break;
 
 	case OVS_KEY_ATTR_TUN_ID:
-		OVS_CB(skb)->tun_id = nla_get_be64(nested_attr);
+		if (OVS_CB(skb)->tun_key == NULL) {
+			/* If tun_key is NULL for this skb, assign it to
+			 * a value the caller passed in for action processing
+			 * and output. This can disappear once we drop support
+	 	 	 * for setting tun_id outside of tun_key.
+	 	 	 */
+			memset(tun_key, 0, sizeof(struct ovs_key_ipv4_tunnel));
+			OVS_CB(skb)->tun_key = tun_key;
+		}
+
+		OVS_CB(skb)->tun_key->tun_id = nla_get_be64(nested_attr);
+		break;
+
+	case OVS_KEY_ATTR_IPV4_TUNNEL:
+		OVS_CB(skb)->tun_key = nla_data(nested_attr);
 		break;
 
 	case OVS_KEY_ATTR_ETHERNET:
@@ -377,6 +392,7 @@ static int do_execute_actions(struct datapath *dp, struct sk_buff *skb,
 	int prev_port = -1;
 	const struct nlattr *a;
 	int rem;
+	struct ovs_key_ipv4_tunnel tun_key;
 
 	for (a = attr, rem = len; rem > 0;
 	     a = nla_next(a, &rem)) {
@@ -407,7 +423,7 @@ static int do_execute_actions(struct datapath *dp, struct sk_buff *skb,
 			break;
 
 		case OVS_ACTION_ATTR_SET:
-			err = execute_set_action(skb, nla_data(a));
+			err = execute_set_action(skb, nla_data(a), &tun_key);
 			break;
 
 		case OVS_ACTION_ATTR_SAMPLE:
@@ -469,7 +485,7 @@ int ovs_execute_actions(struct datapath *dp, struct sk_buff *skb)
 		goto out_loop;
 	}
 
-	OVS_CB(skb)->tun_id = 0;
+	OVS_CB(skb)->tun_key = NULL;
 	error = do_execute_actions(dp, skb, acts->actions,
 					 acts->actions_len, false);
 

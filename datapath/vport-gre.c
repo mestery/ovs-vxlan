@@ -103,7 +103,7 @@ static struct sk_buff *gre_update_header(const struct vport *vport,
 
 	/* Work backwards over the options so the checksum is last. */
 	if (mutable->flags & TNL_F_OUT_KEY_ACTION)
-		*options = be64_get_low32(OVS_CB(skb)->tun_id);
+		*options = be64_get_low32(OVS_CB(skb)->tun_key->tun_id);
 
 	if (mutable->out_key || mutable->flags & TNL_F_OUT_KEY_ACTION)
 		options--;
@@ -285,7 +285,7 @@ static void gre_err(struct sk_buff *skb, u32 info)
 #endif
 
 	__skb_pull(skb, tunnel_hdr_len);
-	ovs_tnl_frag_needed(vport, mutable, skb, mtu, key);
+	ovs_tnl_frag_needed(vport, mutable, skb, mtu);
 	__skb_push(skb, tunnel_hdr_len);
 
 out:
@@ -327,6 +327,7 @@ static int gre_rcv(struct sk_buff *skb)
 	const struct tnl_mutable_config *mutable;
 	int hdr_len;
 	struct iphdr *iph;
+	struct ovs_key_ipv4_tunnel tun_key;
 	__be16 flags;
 	__be64 key;
 
@@ -351,15 +352,15 @@ static int gre_rcv(struct sk_buff *skb)
 		goto error;
 	}
 
-	if (mutable->flags & TNL_F_IN_KEY_MATCH)
-		OVS_CB(skb)->tun_id = key;
-	else
-		OVS_CB(skb)->tun_id = 0;
+
+	tnl_tun_key_init(&tun_key, iph,
+		     mutable->flags & TNL_F_IN_KEY_MATCH ? key : 0);
+	OVS_CB(skb)->tun_key = &tun_key;
 
 	__skb_pull(skb, hdr_len);
 	skb_postpull_rcsum(skb, skb_transport_header(skb), hdr_len + ETH_HLEN);
 
-	ovs_tnl_rcv(vport, skb, iph->tos);
+	ovs_tnl_rcv(vport, skb);
 	return 0;
 
 error:

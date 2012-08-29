@@ -367,9 +367,9 @@ struct vport *ovs_tnl_find_port(struct net *net, __be32 saddr, __be32 daddr,
 	return NULL;
 }
 
-static void ecn_decapsulate(struct sk_buff *skb, u8 tos)
+static void ecn_decapsulate(struct sk_buff *skb)
 {
-	if (unlikely(INET_ECN_is_ce(tos))) {
+	if (unlikely(INET_ECN_is_ce(OVS_CB(skb)->tun_key->ipv4_tos))) {
 		__be16 protocol = skb->protocol;
 
 		skb_set_network_header(skb, ETH_HLEN);
@@ -416,7 +416,7 @@ static void ecn_decapsulate(struct sk_buff *skb, u8 tos)
  * - skb->csum does not include the inner Ethernet header.
  * - The layer pointers are undefined.
  */
-void ovs_tnl_rcv(struct vport *vport, struct sk_buff *skb, u8 tos)
+void ovs_tnl_rcv(struct vport *vport, struct sk_buff *skb)
 {
 	struct ethhdr *eh;
 
@@ -433,7 +433,7 @@ void ovs_tnl_rcv(struct vport *vport, struct sk_buff *skb, u8 tos)
 	skb_clear_rxhash(skb);
 	secpath_reset(skb);
 
-	ecn_decapsulate(skb, tos);
+	ecn_decapsulate(skb);
 	vlan_set_tci(skb, 0);
 
 	if (unlikely(compute_ip_summed(skb, false))) {
@@ -613,7 +613,7 @@ static void ipv6_build_icmp(struct sk_buff *skb, struct sk_buff *nskb,
 
 bool ovs_tnl_frag_needed(struct vport *vport,
 			 const struct tnl_mutable_config *mutable,
-			 struct sk_buff *skb, unsigned int mtu, __be64 flow_key)
+			 struct sk_buff *skb, unsigned int mtu)
 {
 	unsigned int eth_hdr_len = ETH_HLEN;
 	unsigned int total_length = 0, header_length = 0, payload_length;
@@ -697,17 +697,6 @@ bool ovs_tnl_frag_needed(struct vport *vport,
 		ipv6_build_icmp(skb, nskb, mtu, payload_length);
 #endif
 
-	/*
-	 * Assume that flow based keys are symmetric with respect to input
-	 * and output and use the key that we were going to put on the
-	 * outgoing packet for the fake received packet.  If the keys are
-	 * not symmetric then PMTUD needs to be disabled since we won't have
-	 * any way of synthesizing packets.
-	 */
-	if ((mutable->flags & (TNL_F_IN_KEY_MATCH | TNL_F_OUT_KEY_ACTION)) ==
-	    (TNL_F_IN_KEY_MATCH | TNL_F_OUT_KEY_ACTION))
-		OVS_CB(nskb)->tun_id = flow_key;
-
 	if (unlikely(compute_ip_summed(nskb, false))) {
 		kfree_skb(nskb);
 		return false;
@@ -760,8 +749,7 @@ static bool check_mtu(struct sk_buff *skb,
 			mtu = max(mtu, IP_MIN_MTU);
 
 			if (packet_length > mtu &&
-			    ovs_tnl_frag_needed(vport, mutable, skb, mtu,
-						OVS_CB(skb)->tun_id))
+			    ovs_tnl_frag_needed(vport, mutable, skb, mtu))
 				return false;
 		}
 	}
@@ -777,8 +765,7 @@ static bool check_mtu(struct sk_buff *skb,
 			mtu = max(mtu, IPV6_MIN_MTU);
 
 			if (packet_length > mtu &&
-			    ovs_tnl_frag_needed(vport, mutable, skb, mtu,
-						OVS_CB(skb)->tun_id))
+			    ovs_tnl_frag_needed(vport, mutable, skb, mtu))
 				return false;
 		}
 	}
@@ -1000,15 +987,16 @@ unlock:
 }
 
 static struct rtable *__find_route(const struct tnl_mutable_config *mutable,
-				   u8 ipproto, u8 tos)
+				   __be32 saddr, __be32 daddr, u8 ipproto,
+				   u8 tos)
 {
 	/* Tunnel configuration keeps DSCP part of TOS bits, But Linux
 	 * router expect RT_TOS bits only. */
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,39)
 	struct flowi fl = { .nl_u = { .ip4_u = {
-					.daddr = mutable->key.daddr,
-					.saddr = mutable->key.saddr,
+					.daddr = daddr,
+					.saddr = saddr,
 					.tos   = RT_TOS(tos) } },
 					.proto = ipproto };
 	struct rtable *rt;
@@ -1018,8 +1006,8 @@ static struct rtable *__find_route(const struct tnl_mutable_config *mutable,
 
 	return rt;
 #else
-	struct flowi4 fl = { .daddr = mutable->key.daddr,
-			     .saddr = mutable->key.saddr,
+	struct flowi4 fl = { .daddr = daddr,
+			     .saddr = saddr,
 			     .flowi4_tos = RT_TOS(tos),
 			     .flowi4_proto = ipproto };
 
@@ -1029,7 +1017,8 @@ static struct rtable *__find_route(const struct tnl_mutable_config *mutable,
 
 static struct rtable *find_route(struct vport *vport,
 				 const struct tnl_mutable_config *mutable,
-				 u8 tos, struct tnl_cache **cache)
+				 __be32 saddr, __be32 daddr, u8 tos,
+				 struct tnl_cache **cache)
 {
 	struct tnl_vport *tnl_vport = tnl_vport_priv(vport);
 	struct tnl_cache *cur_cache = rcu_dereference(tnl_vport->cache);
@@ -1037,18 +1026,21 @@ static struct rtable *find_route(struct vport *vport,
 	*cache = NULL;
 	tos = RT_TOS(tos);
 
-	if (likely(tos == RT_TOS(mutable->tos) &&
-	    check_cache_valid(cur_cache, mutable))) {
+	if (daddr == mutable->key.daddr && saddr == mutable->key.saddr &&
+	    tos == RT_TOS(mutable->tos) &&
+	    check_cache_valid(cur_cache, mutable)) {
 		*cache = cur_cache;
 		return cur_cache->rt;
 	} else {
 		struct rtable *rt;
 
-		rt = __find_route(mutable, tnl_vport->tnl_ops->ipproto, tos);
+		rt = __find_route(mutable, saddr, daddr,
+				  tnl_vport->tnl_ops->ipproto, tos);
 		if (IS_ERR(rt))
 			return NULL;
 
-		if (likely(tos == RT_TOS(mutable->tos)))
+		if (daddr == mutable->key.daddr && saddr == mutable->key.saddr &&
+		    tos == RT_TOS(mutable->tos))
 			*cache = build_cache(vport, mutable, rt);
 
 		return rt;
@@ -1178,8 +1170,11 @@ int ovs_tnl_send(struct vport *vport, struct sk_buff *skb)
 	struct rtable *rt;
 	struct dst_entry *unattached_dst = NULL;
 	struct tnl_cache *cache;
+	struct ovs_key_ipv4_tunnel tun_key;
 	int sent_len = 0;
 	__be16 frag_off = 0;
+	__be32 daddr;
+	__be32 saddr;
 	u8 ttl;
 	u8 inner_tos;
 	u8 tos;
@@ -1217,13 +1212,32 @@ int ovs_tnl_send(struct vport *vport, struct sk_buff *skb)
 	else
 		inner_tos = 0;
 
+	/* If OVS_CB(skb)->tun_key is NULL, point it at the local tun_key here,
+	 * and zero it out.
+	 */
+	if (OVS_CB(skb)->tun_key == NULL) {
+		memset(&tun_key, 0, sizeof(tun_key));
+		OVS_CB(skb)->tun_key = &tun_key;
+	}
 	if (mutable->flags & TNL_F_TOS_INHERIT)
 		tos = inner_tos;
+	else if (OVS_CB(skb)->tun_key && OVS_CB(skb)->tun_key->ipv4_dst != 0)
+		tos = OVS_CB(skb)->tun_key->ipv4_tos;
 	else
 		tos = mutable->tos;
 
+	if (OVS_CB(skb)->tun_key && OVS_CB(skb)->tun_key->ipv4_dst != 0)
+		daddr = OVS_CB(skb)->tun_key->ipv4_dst;
+	else
+		daddr = mutable->key.daddr;
+
+	if (OVS_CB(skb)->tun_key && OVS_CB(skb)->tun_key->ipv4_dst != 0)
+		saddr = OVS_CB(skb)->tun_key->ipv4_src;
+	else
+		saddr = mutable->key.saddr;
+
 	/* Route lookup */
-	rt = find_route(vport, mutable, tos, &cache);
+	rt = find_route(vport, mutable, saddr, daddr, tos, &cache);
 	if (unlikely(!rt))
 		goto error_free;
 	if (unlikely(!cache))
@@ -1260,7 +1274,10 @@ int ovs_tnl_send(struct vport *vport, struct sk_buff *skb)
 	}
 
 	/* TTL */
-	ttl = mutable->ttl;
+	if (OVS_CB(skb)->tun_key && OVS_CB(skb)->tun_key->ipv4_dst != 0)
+		ttl = OVS_CB(skb)->tun_key->ipv4_ttl;
+	else
+		ttl = mutable->ttl;
 	if (!ttl)
 		ttl = ip4_dst_hoplimit(&rt_dst(rt));
 
@@ -1442,7 +1459,8 @@ static int tnl_set_config(struct net *net, struct nlattr *options,
 		struct net_device *dev;
 		struct rtable *rt;
 
-		rt = __find_route(mutable, tnl_ops->ipproto, mutable->tos);
+		rt = __find_route(mutable, mutable->key.saddr, mutable->key.daddr,
+				  tnl_ops->ipproto, mutable->tos);
 		if (IS_ERR(rt))
 			return -EADDRNOTAVAIL;
 		dev = rt_dst(rt).dev;
