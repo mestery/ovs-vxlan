@@ -170,25 +170,34 @@ OFP_ASSERT(sizeof(struct nx_set_packet_in_format) == 4);
 
 /* NXT_PACKET_IN (analogous to OFPT_PACKET_IN).
  *
- * The NXT_PACKET_IN format is intended to model the OpenFlow-1.2 PACKET_IN
- * with some minor tweaks.  Most notably NXT_PACKET_IN includes the cookie of
- * the rule which triggered the NXT_PACKET_IN message, and the match fields are
- * in NXM format.
+ * NXT_PACKET_IN is similar to the OpenFlow 1.2 OFPT_PACKET_IN.  The
+ * differences are:
  *
- * The match fields in the NXT_PACKET_IN are intended to contain flow
- * processing metadata collected at the time the NXT_PACKET_IN message was
- * triggered.  It is minimally required to contain the NXM_OF_IN_PORT of the
- * packet, but may include other NXM headers such as flow registers.  The match
- * fields are allowed to contain non-metadata (e.g. NXM_OF_ETH_SRC etc).
- * However, this information can typically be found in the packet directly, so
- * it may be redundant.
+ *     - NXT_PACKET_IN includes the cookie of the rule that triggered the
+ *       message.  (OpenFlow 1.3 OFPT_PACKET_IN also includes the cookie.)
+ *
+ *     - The metadata fields use NXM (instead of OXM) field numbers.
+ *
+ * Open vSwitch 1.9.0 and later omits metadata fields that are zero (as allowed
+ * by OpenFlow 1.2).  Earlier versions included all implemented metadata
+ * fields.
+ *
+ * Open vSwitch does not include non-metadata in the nx_match, because by
+ * definition that information can be found in the packet itself.  The format
+ * and the standards allow this, however, so controllers should be prepared to
+ * tolerate future changes.
+ *
+ * The NXM format is convenient for reporting metadata values, but it is
+ * important not to interpret the format as matching against a flow, because it
+ * does not.  Nothing is being matched; arbitrary metadata masks would not be
+ * meaningful.
  *
  * Whereas in most cases a controller can expect to only get back NXM fields
  * that it set up itself (e.g. flow dumps will ordinarily report only NXM
  * fields from flows that the controller added), NXT_PACKET_IN messages might
  * contain fields that the controller does not understand, because the switch
  * might support fields (new registers, new protocols, etc.) that the
- * controller does not.  The controller must prepared to tolerate these.
+ * controller does not.  The controller must prepared to tolerate these.
  *
  * The 'cookie' and 'table_id' fields have no meaning when 'reason' is
  * OFPR_NO_MATCH.  In this case they should be set to 0. */
@@ -210,7 +219,7 @@ struct nx_packet_in {
      * The padding bytes preceding the Ethernet frame ensure that the IP
      * header (if any) following the Ethernet header is 32-bit aligned. */
 
-    /* uint8_t nxm_fields[...]; */ /* Match. */
+    /* uint8_t nxm_fields[...]; */ /* NXM headers. */
     /* uint8_t pad[2]; */          /* Align to 64 bit + 16 bit. */
     /* uint8_t data[0]; */         /* Ethernet frame. */
 };
@@ -284,7 +293,7 @@ enum nx_action_subtype {
     NXAST_NOTE,                 /* struct nx_action_note */
     NXAST_SET_TUNNEL64,         /* struct nx_action_set_tunnel64 */
     NXAST_MULTIPATH,            /* struct nx_action_multipath */
-    NXAST_AUTOPATH,             /* struct nx_action_autopath */
+    NXAST_AUTOPATH__DEPRECATED, /* struct nx_action_autopath */
     NXAST_BUNDLE,               /* struct nx_action_bundle */
     NXAST_BUNDLE_LOAD,          /* struct nx_action_bundle */
     NXAST_RESUBMIT_TABLE,       /* struct nx_action_resubmit */
@@ -294,6 +303,7 @@ enum nx_action_subtype {
     NXAST_DEC_TTL,              /* struct nx_action_header */
     NXAST_FIN_TIMEOUT,          /* struct nx_action_fin_timeout */
     NXAST_CONTROLLER,           /* struct nx_action_controller */
+    NXAST_DEC_TTL_CNT_IDS,      /* struct nx_action_cnt_ids */
 };
 
 /* Header for Nicira-defined actions. */
@@ -1060,6 +1070,35 @@ enum nx_bd_algorithm {
      * Uses the 'fields' and 'basis' parameters. */
     NX_BD_ALG_HRW /* Highest Random Weight. */
 };
+
+
+/* Action structure for NXAST_DEC_TTL_CNT_IDS.
+ *
+ * If the packet is not IPv4 or IPv6, does nothing.  For IPv4 or IPv6, if the
+ * TTL or hop limit is at least 2, decrements it by 1.  Otherwise, if TTL or
+ * hop limit is 0 or 1, sends a packet-in to the controllers with each of the
+ * 'n_controllers' controller IDs specified in 'cnt_ids'.
+ *
+ * (This differs from NXAST_DEC_TTL in that for NXAST_DEC_TTL the packet-in is
+ * sent only to controllers with id 0.)
+ */
+struct nx_action_cnt_ids {
+    ovs_be16 type;              /* OFPAT_VENDOR. */
+    ovs_be16 len;               /* Length including slaves. */
+    ovs_be32 vendor;            /* NX_VENDOR_ID. */
+    ovs_be16 subtype;           /* NXAST_DEC_TTL_CNT_IDS. */
+
+    ovs_be16 n_controllers;     /* Number of controllers. */
+    uint8_t zeros[4];           /* Must be zero. */
+
+    /* Followed by 1 or more controller ids.
+     *
+     * uint16_t cnt_ids[];        // Controller ids.
+     * uint8_t pad[];           // Must be 0 to 8-byte align cnt_ids[].
+     */
+};
+OFP_ASSERT(sizeof(struct nx_action_cnt_ids) == 16);
+
 
 /* Action structure for NXAST_OUTPUT_REG.
  *

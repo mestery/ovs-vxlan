@@ -1309,10 +1309,7 @@ ofputil_encode_flow_mod(const struct ofputil_flow_mod *fm,
         ofm->out_group = htonl(OFPG11_ANY);
         ofm->flags = htons(fm->flags);
         oxm_put_match(msg, &fm->cr);
-        if (fm->ofpacts) {
-            ofpacts_put_openflow11_instructions(fm->ofpacts, fm->ofpacts_len,
-                                                msg);
-        }
+        ofpacts_put_openflow11_instructions(fm->ofpacts, fm->ofpacts_len, msg);
         break;
     }
 
@@ -1332,9 +1329,7 @@ ofputil_encode_flow_mod(const struct ofputil_flow_mod *fm,
         ofm->buffer_id = htonl(fm->buffer_id);
         ofm->out_port = htons(fm->out_port);
         ofm->flags = htons(fm->flags);
-        if (fm->ofpacts) {
-            ofpacts_put_openflow10(fm->ofpacts, fm->ofpacts_len, msg);
-        }
+        ofpacts_put_openflow10(fm->ofpacts, fm->ofpacts_len, msg);
         break;
     }
 
@@ -1357,9 +1352,7 @@ ofputil_encode_flow_mod(const struct ofputil_flow_mod *fm,
         nfm->out_port = htons(fm->out_port);
         nfm->flags = htons(fm->flags);
         nfm->match_len = htons(match_len);
-        if (fm->ofpacts) {
-            ofpacts_put_openflow10(fm->ofpacts, fm->ofpacts_len, msg);
-        }
+        ofpacts_put_openflow10(fm->ofpacts, fm->ofpacts_len, msg);
         break;
     }
 
@@ -1403,15 +1396,42 @@ ofputil_flow_mod_usable_protocols(const struct ofputil_flow_mod *fms,
 }
 
 static enum ofperr
-ofputil_decode_ofpst_flow_request(struct ofputil_flow_stats_request *fsr,
-                                  const struct ofp10_flow_stats_request *ofsr,
-                                  bool aggregate)
+ofputil_decode_ofpst10_flow_request(struct ofputil_flow_stats_request *fsr,
+                                    const struct ofp10_flow_stats_request *ofsr,
+                                    bool aggregate)
 {
     fsr->aggregate = aggregate;
     ofputil_cls_rule_from_ofp10_match(&ofsr->match, 0, &fsr->match);
     fsr->out_port = ntohs(ofsr->out_port);
     fsr->table_id = ofsr->table_id;
     fsr->cookie = fsr->cookie_mask = htonll(0);
+
+    return 0;
+}
+
+static enum ofperr
+ofputil_decode_ofpst11_flow_request(struct ofputil_flow_stats_request *fsr,
+                                    struct ofpbuf *b, bool aggregate)
+{
+    const struct ofp11_flow_stats_request *ofsr;
+    enum ofperr error;
+
+    ofsr = ofpbuf_pull(b, sizeof *ofsr);
+    fsr->aggregate = aggregate;
+    fsr->table_id = ofsr->table_id;
+    error = ofputil_port_from_ofp11(ofsr->out_port, &fsr->out_port);
+    if (error) {
+        return error;
+    }
+    if (ofsr->out_group != htonl(OFPG11_ANY)) {
+        return OFPERR_NXFMFC_GROUPS_NOT_SUPPORTED;
+    }
+    fsr->cookie = ofsr->cookie;
+    fsr->cookie_mask = ofsr->cookie_mask;
+    error = ofputil_pull_ofp11_match(b, 0, &fsr->match, NULL);
+    if (error) {
+        return error;
+    }
 
     return 0;
 }
@@ -1454,10 +1474,16 @@ ofputil_decode_flow_stats_request(struct ofputil_flow_stats_request *fsr,
     raw = ofpraw_pull_assert(&b);
     switch ((int) raw) {
     case OFPRAW_OFPST10_FLOW_REQUEST:
-        return ofputil_decode_ofpst_flow_request(fsr, b.data, false);
+        return ofputil_decode_ofpst10_flow_request(fsr, b.data, false);
 
-    case OFPRAW_OFPST_AGGREGATE_REQUEST:
-        return ofputil_decode_ofpst_flow_request(fsr, b.data, true);
+    case OFPRAW_OFPST10_AGGREGATE_REQUEST:
+        return ofputil_decode_ofpst10_flow_request(fsr, b.data, true);
+
+    case OFPRAW_OFPST11_FLOW_REQUEST:
+        return ofputil_decode_ofpst11_flow_request(fsr, &b, false);
+
+    case OFPRAW_OFPST11_AGGREGATE_REQUEST:
+        return ofputil_decode_ofpst11_flow_request(fsr, &b, true);
 
     case OFPRAW_NXST_FLOW_REQUEST:
         return ofputil_decode_nxst_flow_request(fsr, &b, false);
@@ -1486,7 +1512,7 @@ ofputil_encode_flow_stats_request(const struct ofputil_flow_stats_request *fsr,
         struct ofp11_flow_stats_request *ofsr;
 
         raw = (fsr->aggregate
-               ? OFPRAW_OFPST_AGGREGATE_REQUEST
+               ? OFPRAW_OFPST11_AGGREGATE_REQUEST
                : OFPRAW_OFPST11_FLOW_REQUEST);
         msg = ofpraw_alloc(raw, OFP12_VERSION, NXM_TYPICAL_LEN);
         ofsr = ofpbuf_put_zeros(msg, sizeof *ofsr);
@@ -1504,7 +1530,7 @@ ofputil_encode_flow_stats_request(const struct ofputil_flow_stats_request *fsr,
         struct ofp10_flow_stats_request *ofsr;
 
         raw = (fsr->aggregate
-               ? OFPRAW_OFPST_AGGREGATE_REQUEST
+               ? OFPRAW_OFPST10_AGGREGATE_REQUEST
                : OFPRAW_OFPST10_FLOW_REQUEST);
         msg = ofpraw_alloc(raw, OFP10_VERSION, 0);
         ofsr = ofpbuf_put_zeros(msg, sizeof *ofsr);
@@ -1840,7 +1866,7 @@ ofputil_encode_aggregate_stats_reply(
     enum ofpraw raw;
 
     ofpraw_decode(&raw, request);
-    if (raw == OFPRAW_OFPST_AGGREGATE_REQUEST) {
+    if (raw == OFPRAW_OFPST10_AGGREGATE_REQUEST) {
         packet_count = unknown_to_zero(stats->packet_count);
         byte_count = unknown_to_zero(stats->byte_count);
     } else {
@@ -2041,15 +2067,9 @@ ofputil_decode_packet_in_finish(struct ofputil_packet_in *pin,
     pin->packet_len = b->size;
 
     pin->fmd.in_port = rule->flow.in_port;
-
     pin->fmd.tun_id = rule->flow.tun_id;
-    pin->fmd.tun_id_mask = rule->wc.tun_id_mask;
-
     pin->fmd.metadata = rule->flow.metadata;
-    pin->fmd.metadata_mask = rule->wc.metadata_mask;
-
     memcpy(pin->fmd.regs, rule->flow.regs, sizeof pin->fmd.regs);
-    memcpy(pin->fmd.reg_masks, rule->wc.reg_masks, sizeof pin->fmd.reg_masks);
 }
 
 enum ofperr
@@ -2135,14 +2155,17 @@ ofputil_packet_in_to_rule(const struct ofputil_packet_in *pin,
     int i;
 
     cls_rule_init_catchall(rule, 0);
-    cls_rule_set_tun_id_masked(rule, pin->fmd.tun_id,
-                               pin->fmd.tun_id_mask);
-    cls_rule_set_metadata_masked(rule, pin->fmd.metadata,
-                                 pin->fmd.metadata_mask);
+    if (pin->fmd.tun_id != htonll(0)) {
+        cls_rule_set_tun_id(rule, pin->fmd.tun_id);
+    }
+    if (pin->fmd.metadata != htonll(0)) {
+        cls_rule_set_metadata(rule, pin->fmd.metadata);
+    }
 
     for (i = 0; i < FLOW_N_REGS; i++) {
-        cls_rule_set_reg_masked(rule, i, pin->fmd.regs[i],
-                                pin->fmd.reg_masks[i]);
+        if (pin->fmd.regs[i]) {
+            cls_rule_set_reg(rule, i, pin->fmd.regs[i]);
+        }
     }
 
     cls_rule_set_in_port(rule, pin->fmd.in_port);

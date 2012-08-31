@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 Nicira Networks.
+ * Copyright (c) 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -69,7 +69,7 @@
     DEFINE_OFPACT(SET_L4_DST_PORT, ofpact_l4_port,       ofpact)    \
     DEFINE_OFPACT(REG_MOVE,        ofpact_reg_move,      ofpact)    \
     DEFINE_OFPACT(REG_LOAD,        ofpact_reg_load,      ofpact)    \
-    DEFINE_OFPACT(DEC_TTL,         ofpact_null,          ofpact)    \
+    DEFINE_OFPACT(DEC_TTL,         ofpact_cnt_ids,       cnt_ids)   \
                                                                     \
     /* Metadata. */                                                 \
     DEFINE_OFPACT(SET_TUNNEL,      ofpact_tunnel,        ofpact)    \
@@ -145,7 +145,7 @@ ofpact_end(const struct ofpact *ofpacts, size_t ofpacts_len)
 
 /* Action structure for each OFPACT_*. */
 
-/* OFPACT_STRIP_VLAN, OFPACT_DEC_TTL, OFPACT_POP_QUEUE, OFPACT_EXIT.
+/* OFPACT_STRIP_VLAN, OFPACT_POP_QUEUE, OFPACT_EXIT.
  *
  * Used for OFPAT10_STRIP_VLAN, NXAST_DEC_TTL, NXAST_POP_QUEUE, NXAST_EXIT.
  *
@@ -380,6 +380,18 @@ struct ofpact_note {
     uint8_t data[];
 };
 
+/* OFPACT_DEC_TTL.
+ *
+ * Used for NXAST_DEC_TTL and NXAST_DEC_TTL_CNT_IDS. */
+struct ofpact_cnt_ids {
+    struct ofpact ofpact;
+
+    /* Controller ids. */
+    unsigned int n_controllers;
+    uint16_t cnt_ids[];
+
+};
+
 /* Converting OpenFlow to ofpacts. */
 enum ofperr ofpacts_pull_openflow10(struct ofpbuf *openflow,
                                     unsigned int actions_len,
@@ -492,5 +504,45 @@ OFPACTS
 /* Functions to use after adding ofpacts to a buffer. */
 void ofpact_update_len(struct ofpbuf *, struct ofpact *);
 void ofpact_pad(struct ofpbuf *);
+
+/* OpenFlow 1.1 instructions.
+ * The order is sorted in execution order. Not in the value of OFPIT11_xxx.
+ * It is enforced on parser from text string.
+ */
+#define OVS_INSTRUCTIONS                                    \
+    DEFINE_INST(OFPIT11_APPLY_ACTIONS,                      \
+                ofp11_instruction_actions,        true,     \
+                "apply_actions")                            \
+                                                            \
+    DEFINE_INST(OFPIT11_CLEAR_ACTIONS,                      \
+                ofp11_instruction,                false,    \
+                "clear_actions")                            \
+                                                            \
+    DEFINE_INST(OFPIT11_WRITE_ACTIONS,                      \
+                ofp11_instruction_actions,        true,     \
+                "write_actions")                            \
+                                                            \
+    DEFINE_INST(OFPIT11_WRITE_METADATA,                     \
+                ofp11_instruction_write_metadata, false,    \
+                "write_metadata")                           \
+                                                            \
+    DEFINE_INST(OFPIT11_GOTO_TABLE,                         \
+                ofp11_instruction_goto_table,     false,    \
+                "goto_table")
+
+enum ovs_instruction_type {
+#define DEFINE_INST(ENUM, STRUCT, EXTENSIBLE, NAME) OVSINST_##ENUM,
+    OVS_INSTRUCTIONS
+#undef DEFINE_INST
+};
+
+enum {
+#define DEFINE_INST(ENUM, STRUCT, EXTENSIBLE, NAME) + 1
+    N_OVS_INSTRUCTIONS = OVS_INSTRUCTIONS
+#undef DEFINE_INST
+};
+
+const char *ofpact_instruction_name_from_type(enum ovs_instruction_type type);
+int ofpact_instruction_type_from_name(const char *name);
 
 #endif /* ofp-actions.h */

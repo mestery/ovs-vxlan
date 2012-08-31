@@ -614,6 +614,14 @@ When this field is specified in \fBadd-flow\fR, \fBadd-flows\fR,
 extension to OpenFlow, which as of this writing is only known to be
 implemented by Open vSwitch.
 .
+.IP \fBmetadata=\fIvalue\fR[\fB/\fImask\fR]
+Matches \fIvalue\fR either exactly or with optional \fImask\fR in the metadata
+field. \fIvalue\fR and \fImask\fR are 64-bit integers, by default in decimal
+(use a \fB0x\fR prefix to specify hexadecimal). Arbitrary \fImask\fR values
+are allowed: a 1-bit in \fImask\fR indicates that the corresponding bit in
+\fIvalue\fR must match exactly, and a 0-bit wildcards that bit. Matching on
+metadata was added in Open vSwitch 1.8.
+.
 .PP
 The following shorthand notations are also available:
 .
@@ -942,14 +950,20 @@ Restores the queue to the value it was before any \fBset_queue\fR
 actions were applied.
 .
 .IP \fBdec_ttl\fR
+.IQ \fBdec_ttl\fB[\fR(\fIid1,id2\fI)\fR]\fR
 Decrement TTL of IPv4 packet or hop limit of IPv6 packet.  If the
 TTL or hop limit is initially zero, no decrement occurs.  Instead,
 a ``packet-in'' message with reason code \fBOFPR_INVALID_TTL\fR is
 sent to each connected controller that has enabled receiving them,
-if any.  Processing the current set of actions then stops.
-However, if the current set of actions was reached through
-``resubmit'' then remaining actions in outer levels resume
-processing.
+if any.  Processing the current set of actions then stops.  However,
+if the current set of actions was reached through ``resubmit'' then
+remaining actions in outer levels resume processing.  This action
+also optionally supports the ability to specify a list of valid
+controller ids.  Each of controllers in the list will receive the
+``packet_in'' message only if they have registered to receive the
+invalid ttl packets.  If controller ids are not specified, the
+``packet_in'' message will be sent only to the controllers having
+controller id zero which have registered for the invalid ttl packets.
 .
 .IP \fBnote:\fR[\fIhh\fR]...
 Does nothing at all.  Any number of bytes represented as hex digits
@@ -999,6 +1013,8 @@ the \fBiter_hash\fR algorithm uses \fIarg\fR.
 Refer to \fBnicira\-ext.h\fR for more details.
 .
 .IP "\fBautopath(\fIid\fB, \fIdst\fB[\fIstart\fB..\fIend\fB])\fR"
+Deprecated and slated for removal in Feburary 2013.
+.IP
 Given \fIid\fR, chooses an OpenFlow port and populates it in
 \fIdst\fB[\fIstart\fB..\fIend\fB]\fR, which must be an NXM field as
 described above.

@@ -33,14 +33,14 @@ m4_define([OVS_VSWITCHD_START],
    OVS_LOGDIR=`pwd`; export OVS_LOGDIR
    OVS_DBDIR=`pwd`; export OVS_DBDIR
    OVS_SYSCONFDIR=`pwd`; export OVS_SYSCONFDIR
-   trap 'kill `cat ovsdb-server.pid ovs-vswitchd.pid`' 0
+   ON_EXIT([kill `cat ovsdb-server.pid ovs-vswitchd.pid`])
 
    dnl Create database.
    touch .conf.db.~lock~
    AT_CHECK([ovsdb-tool create conf.db $abs_top_srcdir/vswitchd/vswitch.ovsschema])
 
    dnl Start ovsdb-server.
-   AT_CHECK([ovsdb-server --detach --pidfile --log-file --remote=punix:$OVS_RUNDIR/db.sock], [0], [], [stderr])
+   AT_CHECK([ovsdb-server --detach --no-chdir --pidfile --log-file --remote=punix:$OVS_RUNDIR/db.sock], [0], [], [stderr])
    AT_CHECK([[sed < stderr '
 /vlog|INFO|opened log file/d
 /ovsdb_server|INFO|ovsdb-server (Open vSwitch)/d']])
@@ -50,7 +50,7 @@ m4_define([OVS_VSWITCHD_START],
    AT_CHECK([ovs-vsctl --no-wait init])
 
    dnl Start ovs-vswitchd.
-   AT_CHECK([ovs-vswitchd --detach --pidfile --enable-dummy --disable-system --log-file -vvconn], [0], [], [stderr])
+   AT_CHECK([ovs-vswitchd --detach --no-chdir --pidfile --enable-dummy --disable-system --log-file -vvconn -vofproto_dpif], [0], [], [stderr])
    AT_CAPTURE_FILE([ovs-vswitchd.log])
    AT_CHECK([[sed < stderr '
 /vlog|INFO|opened log file/d
@@ -65,5 +65,4 @@ m4_define([OVS_VSWITCHD_START],
 
 m4_define([OVS_VSWITCHD_STOP],
   [AT_CHECK([ovs-appctl -t ovs-vswitchd exit])
-   AT_CHECK([ovs-appctl -t ovsdb-server exit])
-   trap '' 0])
+   AT_CHECK([ovs-appctl -t ovsdb-server exit])])

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -133,7 +133,7 @@ static struct bond_entry *lookup_bond_entry(const struct bond *,
 static tag_type bond_get_active_slave_tag(const struct bond *);
 static struct bond_slave *choose_output_slave(const struct bond *,
                                               const struct flow *,
-                                              uint16_t vlan);
+                                              uint16_t vlan, tag_type *tags);
 static void bond_update_fake_slave_stats(struct bond *);
 
 /* Attempts to parse 's' as the name of a bond balancing mode.  If successful,
@@ -255,6 +255,12 @@ bond_reconfigure(struct bond *bond, const struct bond_settings *s)
     if (bond->balance != s->balance) {
         bond->balance = s->balance;
         revalidate = true;
+
+        if (bond->balance == BM_STABLE) {
+            VLOG_WARN_ONCE("Stable bond mode is deprecated and may be removed"
+                           " in February 2013. Please email"
+                           " dev@openvswitch.org with concerns.");
+        }
     }
 
     if (bond->basis != s->basis) {
@@ -498,8 +504,9 @@ may_send_learning_packets(const struct bond *bond)
  * is located.  For each MAC that has been learned on a port other than 'bond',
  * it should call bond_compose_learning_packet().
  *
- * This function will only return true if 'bond' is in SLB mode and LACP is not
- * negotiated.  Otherwise sending learning packets isn't necessary.
+ * This function will only return true if 'bond' is in SLB or active-backup
+ * mode and LACP is not negotiated.  Otherwise sending learning packets isn't
+ * necessary.
  *
  * Calling this function resets the state that it checks. */
 bool
@@ -522,13 +529,14 @@ bond_compose_learning_packet(struct bond *bond,
 {
     struct bond_slave *slave;
     struct ofpbuf *packet;
+    tag_type tags = 0;
     struct flow flow;
 
     assert(may_send_learning_packets(bond));
 
     memset(&flow, 0, sizeof flow);
     memcpy(flow.dl_src, eth_src, ETH_ADDR_LEN);
-    slave = choose_output_slave(bond, &flow, vlan);
+    slave = choose_output_slave(bond, &flow, vlan, &tags);
 
     packet = ofpbuf_new(0);
     compose_rarp(packet, eth_src);
@@ -636,7 +644,7 @@ void *
 bond_choose_output_slave(struct bond *bond, const struct flow *flow,
                          uint16_t vlan, tag_type *tags)
 {
-    struct bond_slave *slave = choose_output_slave(bond, flow, vlan);
+    struct bond_slave *slave = choose_output_slave(bond, flow, vlan, tags);
     if (slave) {
         *tags |= bond->balance == BM_STABLE ? bond->stb_tag : slave->tag;
         return slave->aux;
@@ -1404,7 +1412,7 @@ choose_stb_slave(const struct bond *bond, uint32_t flow_hash)
 
 static struct bond_slave *
 choose_output_slave(const struct bond *bond, const struct flow *flow,
-                    uint16_t vlan)
+                    uint16_t vlan, tag_type *tags)
 {
     struct bond_entry *e;
 
@@ -1440,6 +1448,7 @@ choose_output_slave(const struct bond *bond, const struct flow *flow,
             }
             e->tag = tag_create_random();
         }
+        *tags |= e->tag;
         return e->slave;
 
     default:
