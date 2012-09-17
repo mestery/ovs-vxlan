@@ -1600,14 +1600,14 @@ connmgr_flushed(struct connmgr *mgr)
     if (!connmgr_has_controllers(mgr)
         && mgr->fail_mode == OFPROTO_FAIL_STANDALONE) {
         struct ofpbuf ofpacts;
-        struct cls_rule rule;
+        struct match match;
 
         ofpbuf_init(&ofpacts, OFPACT_OUTPUT_SIZE);
         ofpact_put_OUTPUT(&ofpacts)->port = OFPP_NORMAL;
         ofpact_pad(&ofpacts);
 
-        cls_rule_init_catchall(&rule, 0);
-        ofproto_add_flow(mgr->ofproto, &rule, ofpacts.data, ofpacts.size);
+        match_init_catchall(&match);
+        ofproto_add_flow(mgr->ofproto, &match, 0, ofpacts.data, ofpacts.size);
 
         ofpbuf_uninit(&ofpacts);
     }
@@ -1717,7 +1717,7 @@ ofmonitor_create(const struct ofputil_flow_monitor_request *request,
     m->flags = request->flags;
     m->out_port = request->out_port;
     m->table_id = request->table_id;
-    m->match = request->match;
+    minimatch_init(&m->match, &request->match);
 
     *monitorp = m;
     return 0;
@@ -1805,6 +1805,7 @@ ofmonitor_report(struct connmgr *mgr, struct rule *rule,
 
             if (ofconn != abbrev_ofconn || ofconn->monitor_paused) {
                 struct ofputil_flow_update fu;
+                struct match match;
 
                 fu.event = event;
                 fu.reason = event == NXFME_DELETED ? reason : 0;
@@ -1812,7 +1813,8 @@ ofmonitor_report(struct connmgr *mgr, struct rule *rule,
                 fu.hard_timeout = rule->hard_timeout;
                 fu.table_id = rule->table_id;
                 fu.cookie = rule->flow_cookie;
-                fu.match = &rule->cr;
+                minimatch_expand(&rule->cr.match, &match);
+                fu.match = &match;
                 if (flags & NXFMF_ACTIONS) {
                     fu.ofpacts = rule->ofpacts;
                     fu.ofpacts_len = rule->ofpacts_len;

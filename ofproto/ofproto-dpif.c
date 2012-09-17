@@ -118,8 +118,7 @@ static void rule_credit_stats(struct rule_dpif *,
 static void flow_push_stats(struct rule_dpif *, const struct flow *,
                             const struct dpif_flow_stats *);
 static tag_type rule_calculate_tag(const struct flow *,
-                                   const struct flow_wildcards *,
-                                   uint32_t basis);
+                                   const struct minimask *, uint32_t basis);
 static void rule_invalidate(const struct rule_dpif *);
 
 #define MAX_MIRRORS 32
@@ -598,7 +597,6 @@ struct ofproto_dpif {
     struct hmap_node all_ofproto_dpifs_node; /* In 'all_ofproto_dpifs'. */
     struct ofproto up;
     struct dpif *dpif;
-    int max_ports;
 
     /* Special OpenFlow rules. */
     struct rule_dpif *miss_rule; /* Sends flow table misses to controller. */
@@ -744,6 +742,7 @@ construct(struct ofproto *ofproto_)
 {
     struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
     const char *name = ofproto->up.name;
+    int max_ports;
     int error;
     int i;
 
@@ -753,7 +752,9 @@ construct(struct ofproto *ofproto_)
         return error;
     }
 
-    ofproto->max_ports = dpif_get_max_ports(ofproto->dpif);
+    max_ports = dpif_get_max_ports(ofproto->dpif);
+    ofproto_init_max_ports(ofproto_, MIN(max_ports, OFPP_MAX));
+
     ofproto->n_matches = 0;
 
     dpif_flow_flush(ofproto->dpif);
@@ -820,8 +821,9 @@ add_internal_flow(struct ofproto_dpif *ofproto, int id,
     struct ofputil_flow_mod fm;
     int error;
 
-    cls_rule_init_catchall(&fm.cr, 0);
-    cls_rule_set_reg(&fm.cr, 0, id);
+    match_init_catchall(&fm.match);
+    fm.priority = 0;
+    match_set_reg(&fm.match, 0, id);
     fm.new_cookie = htonll(0);
     fm.cookie = htonll(0);
     fm.cookie_mask = htonll(0);
@@ -842,7 +844,7 @@ add_internal_flow(struct ofproto_dpif *ofproto, int id,
         return error;
     }
 
-    *rulep = rule_dpif_lookup__(ofproto, &fm.cr.flow, TBL_INTERNAL);
+    *rulep = rule_dpif_lookup__(ofproto, &fm.match.flow, TBL_INTERNAL);
     assert(*rulep != NULL);
 
     return 0;
@@ -1156,7 +1158,7 @@ get_features(struct ofproto *ofproto_ OVS_UNUSED,
 }
 
 static void
-get_tables(struct ofproto *ofproto_, struct ofp10_table_stats *ots)
+get_tables(struct ofproto *ofproto_, struct ofp12_table_stats *ots)
 {
     struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
     struct dpif_dp_stats s;
@@ -1164,9 +1166,8 @@ get_tables(struct ofproto *ofproto_, struct ofp10_table_stats *ots)
     strcpy(ots->name, "classifier");
 
     dpif_get_dp_stats(ofproto->dpif, &s);
-    put_32aligned_be64(&ots->lookup_count, htonll(s.n_hit + s.n_missed));
-    put_32aligned_be64(&ots->matched_count,
-                       htonll(s.n_hit + ofproto->n_matches));
+    ots->lookup_count = htonll(s.n_hit + s.n_missed);
+    ots->matched_count = htonll(s.n_hit + ofproto->n_matches);
 }
 
 static struct ofport *
@@ -4636,13 +4637,6 @@ rule_construct(struct rule *rule_)
     struct ofproto_dpif *ofproto = ofproto_dpif_cast(rule->up.ofproto);
     struct rule_dpif *victim;
     uint8_t table_id;
-    enum ofperr error;
-
-    error = ofpacts_check(rule->up.ofpacts, rule->up.ofpacts_len,
-                          &rule->up.cr.flow, ofproto->max_ports);
-    if (error) {
-        return error;
-    }
 
     rule->packet_count = 0;
     rule->byte_count = 0;
@@ -4669,10 +4663,17 @@ rule_construct(struct rule *rule_)
     }
 
     table_id = rule->up.table_id;
-    rule->tag = (victim ? victim->tag
-                 : table_id == 0 ? 0
-                 : rule_calculate_tag(&rule->up.cr.flow, &rule->up.cr.wc,
-                                      ofproto->tables[table_id].basis));
+    if (victim) {
+        rule->tag = victim->tag;
+    } else if (table_id == 0) {
+        rule->tag = 0;
+    } else {
+        struct flow flow;
+
+        miniflow_expand(&rule->up.cr.match.flow, &flow);
+        rule->tag = rule_calculate_tag(&flow, &rule->up.cr.match.mask,
+                                       ofproto->tables[table_id].basis);
+    }
 
     complete_operation(rule);
     return 0;
@@ -4745,15 +4746,6 @@ static void
 rule_modify_actions(struct rule *rule_)
 {
     struct rule_dpif *rule = rule_dpif_cast(rule_);
-    struct ofproto_dpif *ofproto = ofproto_dpif_cast(rule->up.ofproto);
-    enum ofperr error;
-
-    error = ofpacts_check(rule->up.ofpacts, rule->up.ofpacts_len,
-                          &rule->up.cr.flow, ofproto->max_ports);
-    if (error) {
-        ofoperation_complete(rule->up.pending, error);
-        return;
-    }
 
     complete_operation(rule);
 }
@@ -5027,7 +5019,7 @@ xlate_table_action(struct action_xlate_ctx *ctx,
                 ctx->tags |= (rule && rule->tag
                               ? rule->tag
                               : rule_calculate_tag(&ctx->flow,
-                                                   &table->other_table->wc,
+                                                   &table->other_table->mask,
                                                    table->basis));
             }
         }
@@ -6015,7 +6007,7 @@ add_mirror_actions(struct action_xlate_ctx *ctx, const struct flow *orig_flow)
         m = ofproto->mirrors[mirror_mask_ffs(mirrors) - 1];
 
         if (!vlan_is_mirrored(m, vlan)) {
-            mirrors &= mirrors - 1;
+            mirrors = zero_rightmost_1bit(mirrors);
             continue;
         }
 
@@ -6045,7 +6037,7 @@ update_mirror_stats(struct ofproto_dpif *ofproto, mirror_mask_t mirrors,
         return;
     }
 
-    for (; mirrors; mirrors &= mirrors - 1) {
+    for (; mirrors; mirrors = zero_rightmost_1bit(mirrors)) {
         struct ofmirror *m;
 
         m = ofproto->mirrors[mirror_mask_ffs(mirrors) - 1];
@@ -6328,18 +6320,17 @@ xlate_normal(struct action_xlate_ctx *ctx)
  * a few more, but not all of the facets or even all of the facets that
  * resubmit to the table modified by MAC learning). */
 
-/* Calculates the tag to use for 'flow' and wildcards 'wc' when it is inserted
+/* Calculates the tag to use for 'flow' and mask 'mask' when it is inserted
  * into an OpenFlow table with the given 'basis'. */
 static tag_type
-rule_calculate_tag(const struct flow *flow, const struct flow_wildcards *wc,
+rule_calculate_tag(const struct flow *flow, const struct minimask *mask,
                    uint32_t secret)
 {
-    if (flow_wildcards_is_catchall(wc)) {
+    if (minimask_is_catchall(mask)) {
         return 0;
     } else {
-        struct flow tag_flow = *flow;
-        flow_zero_wildcards(&tag_flow, wc);
-        return tag_create_deterministic(flow_hash(&tag_flow, secret));
+        uint32_t hash = flow_hash_in_minimask(flow, mask, secret);
+        return tag_create_deterministic(hash);
     }
 }
 
@@ -6441,40 +6432,32 @@ packet_out(struct ofproto *ofproto_, struct ofpbuf *packet,
            const struct ofpact *ofpacts, size_t ofpacts_len)
 {
     struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
-    enum ofperr error;
+    struct odputil_keybuf keybuf;
+    struct dpif_flow_stats stats;
 
-    if (flow->in_port >= ofproto->max_ports && flow->in_port < OFPP_MAX) {
-        return OFPERR_NXBRC_BAD_IN_PORT;
-    }
+    struct ofpbuf key;
 
-    error = ofpacts_check(ofpacts, ofpacts_len, flow, ofproto->max_ports);
-    if (!error) {
-        struct odputil_keybuf keybuf;
-        struct dpif_flow_stats stats;
+    struct action_xlate_ctx ctx;
+    uint64_t odp_actions_stub[1024 / 8];
+    struct ofpbuf odp_actions;
 
-        struct ofpbuf key;
+    ofpbuf_use_stack(&key, &keybuf, sizeof keybuf);
+    odp_flow_key_from_flow(&key, flow);
 
-        struct action_xlate_ctx ctx;
-        uint64_t odp_actions_stub[1024 / 8];
-        struct ofpbuf odp_actions;
+    dpif_flow_stats_extract(flow, packet, time_msec(), &stats);
 
-        ofpbuf_use_stack(&key, &keybuf, sizeof keybuf);
-        odp_flow_key_from_flow(&key, flow);
+    action_xlate_ctx_init(&ctx, ofproto, flow, flow->vlan_tci, NULL,
+                          packet_get_tcp_flags(packet, flow), packet);
+    ctx.resubmit_stats = &stats;
 
-        dpif_flow_stats_extract(flow, packet, time_msec(), &stats);
+    ofpbuf_use_stub(&odp_actions,
+                    odp_actions_stub, sizeof odp_actions_stub);
+    xlate_actions(&ctx, ofpacts, ofpacts_len, &odp_actions);
+    dpif_execute(ofproto->dpif, key.data, key.size,
+                 odp_actions.data, odp_actions.size, packet);
+    ofpbuf_uninit(&odp_actions);
 
-        action_xlate_ctx_init(&ctx, ofproto, flow, flow->vlan_tci, NULL,
-                              packet_get_tcp_flags(packet, flow), packet);
-        ctx.resubmit_stats = &stats;
-
-        ofpbuf_use_stub(&odp_actions,
-                        odp_actions_stub, sizeof odp_actions_stub);
-        xlate_actions(&ctx, ofpacts, ofpacts_len, &odp_actions);
-        dpif_execute(ofproto->dpif, key.data, key.size,
-                     odp_actions.data, odp_actions.size, packet);
-        ofpbuf_uninit(&odp_actions);
-    }
-    return error;
+    return 0;
 }
 
 /* NetFlow. */

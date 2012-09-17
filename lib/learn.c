@@ -20,6 +20,7 @@
 
 #include "byte-order.h"
 #include "dynamic-string.h"
+#include "match.h"
 #include "meta-flow.h"
 #include "nx-match.h"
 #include "ofp-actions.h"
@@ -170,9 +171,9 @@ enum ofperr
 learn_check(const struct ofpact_learn *learn, const struct flow *flow)
 {
     const struct ofpact_learn_spec *spec;
-    struct cls_rule rule;
+    struct match match;
 
-    cls_rule_init_catchall(&rule, 0);
+    match_init_catchall(&match);
     for (spec = learn->specs; spec < &learn->specs[learn->n_specs]; spec++) {
         enum ofperr error;
 
@@ -187,16 +188,16 @@ learn_check(const struct ofpact_learn *learn, const struct flow *flow)
         /* Check the destination. */
         switch (spec->dst_type) {
         case NX_LEARN_DST_MATCH:
-            error = mf_check_src(&spec->dst, &rule.flow);
+            error = mf_check_src(&spec->dst, &match.flow);
             if (error) {
                 return error;
             }
 
-            mf_write_subfield(&spec->dst, &spec->src_imm, &rule);
+            mf_write_subfield(&spec->dst, &spec->src_imm, &match);
             break;
 
         case NX_LEARN_DST_LOAD:
-            error = mf_check_dst(&spec->dst, &rule.flow);
+            error = mf_check_dst(&spec->dst, &match.flow);
             if (error) {
                 return error;
             }
@@ -297,7 +298,8 @@ learn_execute(const struct ofpact_learn *learn, const struct flow *flow,
 {
     const struct ofpact_learn_spec *spec;
 
-    cls_rule_init_catchall(&fm->cr, learn->priority);
+    match_init_catchall(&fm->match);
+    fm->priority = learn->priority;
     fm->cookie = htonll(0);
     fm->cookie_mask = htonll(0);
     fm->new_cookie = htonll(learn->cookie);
@@ -331,13 +333,12 @@ learn_execute(const struct ofpact_learn *learn, const struct flow *flow,
 
         switch (spec->dst_type) {
         case NX_LEARN_DST_MATCH:
-            mf_write_subfield(&spec->dst, &value, &fm->cr);
+            mf_write_subfield(&spec->dst, &value, &fm->match);
             break;
 
         case NX_LEARN_DST_LOAD:
             for (ofs = 0; ofs < spec->n_bits; ofs += chunk) {
                 struct ofpact_reg_load *load;
-                ovs_be64 value_be;
 
                 chunk = MIN(spec->n_bits - ofs, 64);
 
@@ -345,12 +346,9 @@ learn_execute(const struct ofpact_learn *learn, const struct flow *flow,
                 load->dst.field = spec->dst.field;
                 load->dst.ofs = spec->dst.ofs + ofs;
                 load->dst.n_bits = chunk;
-
-                memset(&value_be, 0, sizeof value_be);
                 bitwise_copy(&value, sizeof value, ofs,
-                             &value_be, sizeof value_be, 0,
+                             &load->subvalue, sizeof load->subvalue, 0,
                              chunk);
-                load->value = ntohll(value_be);
             }
             break;
 
@@ -508,7 +506,7 @@ learn_parse_spec(const char *orig, char *name, char *value,
  *
  * Prints an error on stderr and aborts the program if 'arg' syntax is invalid.
  *
- * If 'flow' is nonnull, then it should be the flow from a cls_rule that is
+ * If 'flow' is nonnull, then it should be the flow from a struct match that is
  * the matching rule for the learning action.  This helps to better validate
  * the action's arguments.
  *
@@ -520,7 +518,7 @@ learn_parse(char *arg, const struct flow *flow, struct ofpbuf *ofpacts)
     char *name, *value;
 
     struct ofpact_learn *learn;
-    struct cls_rule rule;
+    struct match match;
     enum ofperr error;
 
     learn = ofpact_put_LEARN(ofpacts);
@@ -529,7 +527,7 @@ learn_parse(char *arg, const struct flow *flow, struct ofpbuf *ofpacts)
     learn->priority = OFP_DEFAULT_PRIORITY;
     learn->table_id = 1;
 
-    cls_rule_init_catchall(&rule, 0);
+    match_init_catchall(&match);
     while (ofputil_parse_key_value(&arg, &name, &value)) {
         if (!strcmp(name, "table")) {
             learn->table_id = atoi(value);
@@ -567,17 +565,17 @@ learn_parse(char *arg, const struct flow *flow, struct ofpbuf *ofpacts)
             }
             if ((spec->dst_type == NX_LEARN_DST_MATCH
                  || spec->dst_type == NX_LEARN_DST_LOAD)
-                && !mf_are_prereqs_ok(spec->dst.field, &rule.flow)) {
+                && !mf_are_prereqs_ok(spec->dst.field, &match.flow)) {
                 ovs_fatal(0, "%s: cannot specify destination field %s because "
                           "prerequisites are not satisfied",
                           orig, spec->dst.field->name);
             }
 
-            /* Update 'rule' to allow for satisfying destination
+            /* Update 'match' to allow for satisfying destination
              * prerequisites. */
             if (spec->src_type == NX_LEARN_SRC_IMMEDIATE
                 && spec->dst_type == NX_LEARN_DST_MATCH) {
-                mf_write_subfield(&spec->dst, &spec->src_imm, &rule);
+                mf_write_subfield(&spec->dst, &spec->src_imm, &match);
             }
         }
     }
@@ -593,32 +591,15 @@ learn_parse(char *arg, const struct flow *flow, struct ofpbuf *ofpacts)
     free(orig);
 }
 
-static void
-format_subvalue(const union mf_subvalue *subvalue, struct ds *s)
-{
-    int i;
-
-    for (i = 0; i < ARRAY_SIZE(subvalue->u8); i++) {
-        if (subvalue->u8[i]) {
-            ds_put_format(s, "0x%"PRIx8, subvalue->u8[i]);
-            for (i++; i < ARRAY_SIZE(subvalue->u8); i++) {
-                ds_put_format(s, "%02"PRIx8, subvalue->u8[i]);
-            }
-            return;
-        }
-    }
-    ds_put_char(s, '0');
-}
-
 /* Appends a description of 'learn' to 's', in the format that ovs-ofctl(8)
  * describes. */
 void
 learn_format(const struct ofpact_learn *learn, struct ds *s)
 {
     const struct ofpact_learn_spec *spec;
-    struct cls_rule rule;
+    struct match match;
 
-    cls_rule_init_catchall(&rule, 0);
+    match_init_catchall(&match);
 
     ds_put_format(s, "learn(table=%"PRIu8, learn->table_id);
     if (learn->idle_timeout != OFP_FLOW_PERMANENT) {
@@ -661,7 +642,7 @@ learn_format(const struct ofpact_learn *learn, struct ds *s)
             } else {
                 mf_format_subfield(&spec->dst, s);
                 ds_put_char(s, '=');
-                format_subvalue(&spec->src_imm, s);
+                mf_format_subvalue(&spec->src_imm, s);
             }
             break;
 
@@ -676,7 +657,7 @@ learn_format(const struct ofpact_learn *learn, struct ds *s)
 
         case NX_LEARN_SRC_IMMEDIATE | NX_LEARN_DST_LOAD:
             ds_put_format(s, "load:");
-            format_subvalue(&spec->src_imm, s);
+            mf_format_subvalue(&spec->src_imm, s);
             ds_put_cstr(s, "->");
             mf_format_subfield(&spec->dst, s);
             break;

@@ -17,6 +17,7 @@
 #ifndef UTIL_H
 #define UTIL_H 1
 
+#include <limits.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -101,6 +102,14 @@ static inline uintmax_t
 rightmost_1bit(uintmax_t x)
 {
     return x & -x;
+}
+
+/* Returns 'x' with its rightmost 1-bit changed to a zero (e.g. 01011000 =>
+ * 01010000), or 0 if 'x' is 0. */
+static inline uintmax_t
+zero_rightmost_1bit(uintmax_t x)
+{
+    return x & (x - 1);
 }
 
 #ifndef MIN
@@ -233,9 +242,33 @@ char *xreadlink(const char *filename);
 char *follow_symlinks(const char *filename);
 
 void ignore(bool x OVS_UNUSED);
+
+/* Returns the number of trailing 0-bits in 'n'.  Undefined if 'n' == 0.
+ *
+ * This compiles to a single machine instruction ("bsf") with GCC on x86. */
+#if !defined(UINT_MAX) || !defined(UINT32_MAX)
+#error "Someone screwed up the #includes."
+#elif __GNUC__ >= 4 && UINT_MAX == UINT32_MAX
+static inline int
+raw_ctz(uint32_t n)
+{
+    return __builtin_ctz(n);
+}
+#else
+/* Defined in util.c. */
+int raw_ctz(uint32_t n);
+#endif
+
+/* Returns the number of trailing 0-bits in 'n', or 32 if 'n' is 0. */
+static inline int
+ctz(uint32_t n)
+{
+    return n ? raw_ctz(n) : 32;
+}
+
 int log_2_floor(uint32_t);
 int log_2_ceil(uint32_t);
-int ctz(uint32_t);
+int popcount(uint32_t);
 
 bool is_all_zeros(const uint8_t *, size_t);
 bool is_all_ones(const uint8_t *, size_t);

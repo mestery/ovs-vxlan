@@ -29,6 +29,7 @@
 #include "shash.h"
 #include "timeval.h"
 
+struct match;
 struct ofpact;
 struct ofputil_flow_mod;
 struct simap;
@@ -61,6 +62,7 @@ struct ofproto {
     /* Datapath. */
     struct hmap ports;          /* Contains "struct ofport"s. */
     struct shash port_by_name;
+    uint16_t max_ports;         /* Max possible OpenFlow port num, plus one. */
 
     /* Flow tables. */
     struct oftable *tables;
@@ -93,6 +95,7 @@ struct ofproto {
 };
 
 void ofproto_init_tables(struct ofproto *, int n_tables);
+void ofproto_init_max_ports(struct ofproto *, uint16_t max_ports);
 
 struct ofproto *ofproto_lookup(const char *name);
 struct ofport *ofproto_get_port(const struct ofproto *, uint16_t ofp_port);
@@ -365,6 +368,11 @@ struct ofproto_class {
      * ->construct() should delete flows from the underlying datapath, if
      * necessary, rather than populating the tables.
      *
+     * If the ofproto knows the maximum port number that the datapath can have,
+     * then it can call ofproto_init_max_ports().  If it does so, then the
+     * client will ensure that the actions it allows to be used through
+     * OpenFlow do not refer to ports above that maximum number.
+     *
      * Only one ofproto instance needs to be supported for any given datapath.
      * If a datapath is already open as part of one "ofproto", then another
      * attempt to "construct" the same datapath as part of another ofproto is
@@ -456,7 +464,17 @@ struct ofproto_class {
      *
      *   - 'name' to "table#" where # is the table ID.
      *
-     *   - 'wildcards' to OFPFW10_ALL.
+     *   - 'match' and 'wildcards' to OFPXMT12_MASK.
+     *
+     *   - 'write_actions' and 'apply_actions' to OFPAT12_OUTPUT.
+     *
+     *   - 'write_setfields' and 'apply_setfields' to OFPXMT12_MASK.
+     *
+     *   - 'metadata_match' and 'metadata_write' to UINT64_MAX.
+     *
+     *   - 'instructions' to OFPIT11_ALL.
+     *
+     *   - 'config' to OFPTC11_TABLE_MISS_MASK.
      *
      *   - 'max_entries' to 1,000,000.
      *
@@ -472,6 +490,21 @@ struct ofproto_class {
      *   - 'wildcards' to the set of wildcards actually supported by the table
      *     (if it doesn't support all OpenFlow wildcards).
      *
+     *   - 'instructions' to set the instructions actually supported by
+     *     the table.
+     *
+     *   - 'write_actions' to set the write actions actually supported by
+     *     the table (if it doesn't support all OpenFlow actions).
+     *
+     *   - 'apply_actions' to set the apply actions actually supported by
+     *     the table (if it doesn't support all OpenFlow actions).
+     *
+     *   - 'write_setfields' to set the write setfields actually supported by
+     *     the table.
+     *
+     *   - 'apply_setfields' to set the apply setfields actually supported by
+     *     the table.
+     *
      *   - 'max_entries' to the maximum number of flows actually supported by
      *     the hardware.
      *
@@ -481,10 +514,10 @@ struct ofproto_class {
      *   - 'matched_count' to the number of packets looked up in this flow
      *     table so far that matched one of the flow entries.
      *
-     * Keep in mind that all of the members of struct ofp10_table_stats are in
-     * network byte order.
+     * All of the members of struct ofp12_table_stats are in network byte
+     * order.
      */
-    void (*get_tables)(struct ofproto *ofproto, struct ofp10_table_stats *ots);
+    void (*get_tables)(struct ofproto *ofproto, struct ofp12_table_stats *ots);
 
 /* ## ---------------- ## */
 /* ## ofport Functions ## */
@@ -694,24 +727,22 @@ struct ofproto_class {
 /* ## OpenFlow Rule Functions ## */
 /* ## ----------------------- ## */
 
-
-
-    /* Chooses an appropriate table for 'cls_rule' within 'ofproto'.  On
+    /* Chooses an appropriate table for 'match' within 'ofproto'.  On
      * success, stores the table ID into '*table_idp' and returns 0.  On
      * failure, returns an OpenFlow error code.
      *
-     * The choice of table should be a function of 'cls_rule' and 'ofproto''s
+     * The choice of table should be a function of 'match' and 'ofproto''s
      * datapath capabilities.  It should not depend on the flows already in
      * 'ofproto''s flow tables.  Failure implies that an OpenFlow rule with
-     * 'cls_rule' as its matching condition can never be inserted into
-     * 'ofproto', even starting from an empty flow table.
+     * 'match' as its matching condition can never be inserted into 'ofproto',
+     * even starting from an empty flow table.
      *
      * If multiple tables are candidates for inserting the flow, the function
      * should choose one arbitrarily (but deterministically).
      *
      * If this function is NULL then table 0 is always chosen. */
     enum ofperr (*rule_choose_table)(const struct ofproto *ofproto,
-                                     const struct cls_rule *cls_rule,
+                                     const struct match *match,
                                      uint8_t *table_idp);
 
     /* Life-cycle functions for a "struct rule" (see "Life Cycle" above).
@@ -796,11 +827,7 @@ struct ofproto_class {
      *     registers, then it is an error if 'rule->cr' does not wildcard all
      *     registers.
      *
-     *   - Validate that 'rule->ofpacts' is a sequence of well-formed actions
-     *     that the datapath can correctly implement.  If your ofproto
-     *     implementation only implements a subset of the actions that Open
-     *     vSwitch understands, then you should implement your own action
-     *     validation.
+     *   - Validate that the datapath can correctly implement 'rule->ofpacts'.
      *
      *   - If the rule is valid, update the datapath flow table, adding the new
      *     rule or replacing the existing one.
@@ -882,8 +909,8 @@ struct ofproto_class {
      *
      * ->rule_modify_actions() should set the following in motion:
      *
-     *   - Validate that the actions now in 'rule' are well-formed OpenFlow
-     *     actions that the datapath can correctly implement.
+     *   - Validate that the datapath can correctly implement the actions now
+     *     in 'rule'.
      *
      *   - Update the datapath flow table with the new actions.
      *
@@ -936,8 +963,8 @@ struct ofproto_class {
      * The caller retains ownership of 'packet' and of 'ofpacts', so
      * ->packet_out() should not modify or free them.
      *
-     * This function must validate that it can implement 'ofpacts'.  If not,
-     * then it should return an OpenFlow error code.
+     * This function must validate that it can correctly implement 'ofpacts'.
+     * If not, then it should return an OpenFlow error code.
      *
      * 'flow' reflects the flow information for 'packet'.  All of the
      * information in 'flow' is extracted from 'packet', except for
@@ -946,17 +973,18 @@ struct ofproto_class {
      *
      * flow->in_port comes from the OpenFlow OFPT_PACKET_OUT message.  The
      * implementation should reject invalid flow->in_port values by returning
-     * OFPERR_NXBRC_BAD_IN_PORT.  For consistency, the implementation should
-     * consider valid for flow->in_port any value that could possibly be seen
-     * in a packet that it passes to connmgr_send_packet_in().  Ideally, even
-     * an implementation that never generates packet-ins (e.g. due to hardware
-     * limitations) should still allow flow->in_port values for every possible
-     * physical port and OFPP_LOCAL.  The only virtual ports (those above
-     * OFPP_MAX) that the caller will ever pass in as flow->in_port, other than
-     * OFPP_LOCAL, are OFPP_NONE and OFPP_CONTROLLER.  The implementation
-     * should allow both of these, treating each of them as packets generated
-     * by the controller as opposed to packets originating from some switch
-     * port.
+     * OFPERR_OFPBRC_BAD_PORT.  (If the implementation called
+     * ofproto_init_max_ports(), then the client will reject these ports
+     * itself.)  For consistency, the implementation should consider valid for
+     * flow->in_port any value that could possibly be seen in a packet that it
+     * passes to connmgr_send_packet_in().  Ideally, even an implementation
+     * that never generates packet-ins (e.g. due to hardware limitations)
+     * should still allow flow->in_port values for every possible physical port
+     * and OFPP_LOCAL.  The only virtual ports (those above OFPP_MAX) that the
+     * caller will ever pass in as flow->in_port, other than OFPP_LOCAL, are
+     * OFPP_NONE and OFPP_CONTROLLER.  The implementation should allow both of
+     * these, treating each of them as packets generated by the controller as
+     * opposed to packets originating from some switch port.
      *
      * (Ordinarily the only effect of flow->in_port is on output actions that
      * involve the input port, such as actions that output to OFPP_IN_PORT,
@@ -1215,9 +1243,11 @@ enum { OFPROTO_POSTPONE = 1 << 16 };
 BUILD_ASSERT_DECL(OFPROTO_POSTPONE < OFPERR_OFS);
 
 int ofproto_flow_mod(struct ofproto *, const struct ofputil_flow_mod *);
-void ofproto_add_flow(struct ofproto *, const struct cls_rule *,
+void ofproto_add_flow(struct ofproto *, const struct match *,
+                      unsigned int priority,
                       const struct ofpact *ofpacts, size_t ofpacts_len);
-bool ofproto_delete_flow(struct ofproto *, const struct cls_rule *);
+bool ofproto_delete_flow(struct ofproto *,
+                         const struct match *, unsigned int priority);
 void ofproto_flush_flows(struct ofproto *);
 
 #endif /* ofproto/ofproto-provider.h */

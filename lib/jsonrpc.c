@@ -178,6 +178,14 @@ jsonrpc_get_backlog(const struct jsonrpc *rpc)
     return rpc->status ? 0 : rpc->backlog;
 }
 
+/* Returns the number of bytes that have been received on 'rpc''s underlying
+ * stream.  (The value wraps around if it exceeds UINT_MAX.) */
+unsigned int
+jsonrpc_get_received_bytes(const struct jsonrpc *rpc)
+{
+    return rpc->input.head;
+}
+
 /* Returns 'rpc''s name, that is, the name returned by stream_get_name() for
  * the stream underlying 'rpc' when 'rpc' was created. */
 const char *
@@ -880,9 +888,23 @@ jsonrpc_session_run(struct jsonrpc_session *s)
     }
 
     if (s->rpc) {
+        size_t backlog;
         int error;
 
+        backlog = jsonrpc_get_backlog(s->rpc);
         jsonrpc_run(s->rpc);
+        if (jsonrpc_get_backlog(s->rpc) < backlog) {
+            /* Data previously caught in a queue was successfully sent (or
+             * there's an error, which we'll catch below.)
+             *
+             * We don't count data that is successfully sent immediately as
+             * activity, because there's a lot of queuing downstream from us,
+             * which means that we can push a lot of data into a connection
+             * that has stalled and won't ever recover.
+             */
+            reconnect_activity(s->reconnect, time_msec());
+        }
+
         error = jsonrpc_get_status(s->rpc);
         if (error) {
             reconnect_disconnected(s->reconnect, time_msec(), error);
@@ -974,10 +996,21 @@ struct jsonrpc_msg *
 jsonrpc_session_recv(struct jsonrpc_session *s)
 {
     if (s->rpc) {
+        unsigned int received_bytes;
         struct jsonrpc_msg *msg;
+
+        received_bytes = jsonrpc_get_received_bytes(s->rpc);
         jsonrpc_recv(s->rpc, &msg);
+        if (received_bytes != jsonrpc_get_received_bytes(s->rpc)) {
+            /* Data was successfully received.
+             *
+             * Previously we only counted receiving a full message as activity,
+             * but with large messages or a slow connection that policy could
+             * time out the session mid-message. */
+            reconnect_activity(s->reconnect, time_msec());
+        }
+
         if (msg) {
-            reconnect_received(s->reconnect, time_msec());
             if (msg->type == JSONRPC_REQUEST && !strcmp(msg->method, "echo")) {
                 /* Echo request.  Send reply. */
                 struct jsonrpc_msg *reply;

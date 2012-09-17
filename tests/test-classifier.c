@@ -41,28 +41,28 @@
 
 /* Fields in a rule. */
 #define CLS_FIELDS                                                  \
-    /*                                    struct flow  all-caps */  \
-    /*        FWW_* bit(s)                member name  name     */  \
-    /*        --------------------------  -----------  -------- */  \
-    CLS_FIELD(0,                          tun_id,      TUN_ID)      \
-    CLS_FIELD(0,                          metadata,    METADATA)    \
-    CLS_FIELD(0,                          nw_src,      NW_SRC)      \
-    CLS_FIELD(0,                          nw_dst,      NW_DST)      \
-    CLS_FIELD(FWW_IN_PORT,                in_port,     IN_PORT)     \
-    CLS_FIELD(0,                          vlan_tci,    VLAN_TCI)    \
-    CLS_FIELD(FWW_DL_TYPE,                dl_type,     DL_TYPE)     \
-    CLS_FIELD(0,                          tp_src,      TP_SRC)      \
-    CLS_FIELD(0,                          tp_dst,      TP_DST)      \
-    CLS_FIELD(0,                          dl_src,      DL_SRC)      \
-    CLS_FIELD(0,                          dl_dst,      DL_DST)      \
-    CLS_FIELD(FWW_NW_PROTO,               nw_proto,    NW_PROTO)    \
-    CLS_FIELD(FWW_NW_DSCP,                nw_tos,      NW_DSCP)
+    /*        struct flow  all-caps */  \
+    /*        member name  name     */  \
+    /*        -----------  -------- */  \
+    CLS_FIELD(tun_id,      TUN_ID)      \
+    CLS_FIELD(metadata,    METADATA)    \
+    CLS_FIELD(nw_src,      NW_SRC)      \
+    CLS_FIELD(nw_dst,      NW_DST)      \
+    CLS_FIELD(in_port,     IN_PORT)     \
+    CLS_FIELD(vlan_tci,    VLAN_TCI)    \
+    CLS_FIELD(dl_type,     DL_TYPE)     \
+    CLS_FIELD(tp_src,      TP_SRC)      \
+    CLS_FIELD(tp_dst,      TP_DST)      \
+    CLS_FIELD(dl_src,      DL_SRC)      \
+    CLS_FIELD(dl_dst,      DL_DST)      \
+    CLS_FIELD(nw_proto,    NW_PROTO)    \
+    CLS_FIELD(nw_tos,      NW_DSCP)
 
 /* Field indexes.
  *
  * (These are also indexed into struct classifier's 'tables' array.) */
 enum {
-#define CLS_FIELD(WILDCARDS, MEMBER, NAME) CLS_F_IDX_##NAME,
+#define CLS_FIELD(MEMBER, NAME) CLS_F_IDX_##NAME,
     CLS_FIELDS
 #undef CLS_FIELD
     CLS_N_FIELDS
@@ -72,15 +72,13 @@ enum {
 struct cls_field {
     int ofs;                    /* Offset in struct flow. */
     int len;                    /* Length in bytes. */
-    flow_wildcards_t wildcards; /* FWW_* bit or bits for this field. */
     const char *name;           /* Name (for debugging). */
 };
 
 static const struct cls_field cls_fields[CLS_N_FIELDS] = {
-#define CLS_FIELD(WILDCARDS, MEMBER, NAME)      \
+#define CLS_FIELD(MEMBER, NAME)                 \
     { offsetof(struct flow, MEMBER),            \
       sizeof ((struct flow *)0)->MEMBER,        \
-      WILDCARDS,                                \
       #NAME },
     CLS_FIELDS
 #undef CLS_FIELD
@@ -96,6 +94,11 @@ test_rule_from_cls_rule(const struct cls_rule *rule)
 {
     return rule ? CONTAINER_OF(rule, struct test_rule, cls_rule) : NULL;
 }
+
+static struct test_rule *make_rule(int wc_fields, unsigned int priority,
+                                   int value_pat);
+static void free_rule(struct test_rule *);
+static struct test_rule *clone_rule(const struct test_rule *);
 
 /* Trivial (linear) classifier. */
 struct tcls {
@@ -136,14 +139,12 @@ tcls_insert(struct tcls *tcls, const struct test_rule *rule)
 {
     size_t i;
 
-    assert(!flow_wildcards_is_exact(&rule->cls_rule.wc)
-           || rule->cls_rule.priority == UINT_MAX);
     for (i = 0; i < tcls->n_rules; i++) {
         const struct cls_rule *pos = &tcls->rules[i]->cls_rule;
         if (cls_rule_equal(pos, &rule->cls_rule)) {
             /* Exact match. */
-            free(tcls->rules[i]);
-            tcls->rules[i] = xmemdup(rule, sizeof *rule);
+            free_rule(tcls->rules[i]);
+            tcls->rules[i] = clone_rule(rule);
             return tcls->rules[i];
         } else if (pos->priority < rule->cls_rule.priority) {
             break;
@@ -158,7 +159,7 @@ tcls_insert(struct tcls *tcls, const struct test_rule *rule)
         memmove(&tcls->rules[i + 1], &tcls->rules[i],
                 sizeof *tcls->rules * (tcls->n_rules - i));
     }
-    tcls->rules[i] = xmemdup(rule, sizeof *rule);
+    tcls->rules[i] = clone_rule(rule);
     tcls->n_rules++;
     return tcls->rules[i];
 }
@@ -182,43 +183,54 @@ tcls_remove(struct tcls *cls, const struct test_rule *rule)
 }
 
 static bool
-match(const struct cls_rule *wild, const struct flow *fixed)
+match(const struct cls_rule *wild_, const struct flow *fixed)
 {
+    struct match wild;
     int f_idx;
 
+    minimatch_expand(&wild_->match, &wild);
     for (f_idx = 0; f_idx < CLS_N_FIELDS; f_idx++) {
-        const struct cls_field *f = &cls_fields[f_idx];
         bool eq;
 
-        if (f->wildcards) {
-            void *wild_field = (char *) &wild->flow + f->ofs;
-            void *fixed_field = (char *) fixed + f->ofs;
-            eq = ((wild->wc.wildcards & f->wildcards) == f->wildcards
-                  || !memcmp(wild_field, fixed_field, f->len));
-        } else if (f_idx == CLS_F_IDX_NW_SRC) {
-            eq = !((fixed->nw_src ^ wild->flow.nw_src) & wild->wc.nw_src_mask);
+        if (f_idx == CLS_F_IDX_NW_SRC) {
+            eq = !((fixed->nw_src ^ wild.flow.nw_src)
+                   & wild.wc.masks.nw_src);
         } else if (f_idx == CLS_F_IDX_NW_DST) {
-            eq = !((fixed->nw_dst ^ wild->flow.nw_dst) & wild->wc.nw_dst_mask);
+            eq = !((fixed->nw_dst ^ wild.flow.nw_dst)
+                   & wild.wc.masks.nw_dst);
         } else if (f_idx == CLS_F_IDX_TP_SRC) {
-            eq = !((fixed->tp_src ^ wild->flow.tp_src) & wild->wc.tp_src_mask);
+            eq = !((fixed->tp_src ^ wild.flow.tp_src)
+                   & wild.wc.masks.tp_src);
         } else if (f_idx == CLS_F_IDX_TP_DST) {
-            eq = !((fixed->tp_dst ^ wild->flow.tp_dst) & wild->wc.tp_dst_mask);
+            eq = !((fixed->tp_dst ^ wild.flow.tp_dst)
+                   & wild.wc.masks.tp_dst);
         } else if (f_idx == CLS_F_IDX_DL_SRC) {
-            eq = eth_addr_equal_except(fixed->dl_src, wild->flow.dl_src,
-                                       wild->wc.dl_src_mask);
+            eq = eth_addr_equal_except(fixed->dl_src, wild.flow.dl_src,
+                                       wild.wc.masks.dl_src);
         } else if (f_idx == CLS_F_IDX_DL_DST) {
-            eq = eth_addr_equal_except(fixed->dl_dst, wild->flow.dl_dst,
-                                       wild->wc.dl_dst_mask);
+            eq = eth_addr_equal_except(fixed->dl_dst, wild.flow.dl_dst,
+                                       wild.wc.masks.dl_dst);
         } else if (f_idx == CLS_F_IDX_VLAN_TCI) {
-            eq = !((fixed->vlan_tci ^ wild->flow.vlan_tci)
-                   & wild->wc.vlan_tci_mask);
+            eq = !((fixed->vlan_tci ^ wild.flow.vlan_tci)
+                   & wild.wc.masks.vlan_tci);
         } else if (f_idx == CLS_F_IDX_TUN_ID) {
-            eq = !((fixed->tun_id ^ wild->flow.tun_id) & wild->wc.tun_id_mask);
+            eq = !((fixed->tun_id ^ wild.flow.tun_id)
+                   & wild.wc.masks.tun_id);
         } else if (f_idx == CLS_F_IDX_METADATA) {
-            eq = !((fixed->metadata ^ wild->flow.metadata)
-                   & wild->wc.metadata_mask);
+            eq = !((fixed->metadata ^ wild.flow.metadata)
+                   & wild.wc.masks.metadata);
         } else if (f_idx == CLS_F_IDX_NW_DSCP) {
-            eq = !((fixed->nw_tos ^ wild->flow.nw_tos) & IP_DSCP_MASK);
+            eq = !((fixed->nw_tos ^ wild.flow.nw_tos) &
+                   (wild.wc.masks.nw_tos & IP_DSCP_MASK));
+        } else if (f_idx == CLS_F_IDX_NW_PROTO) {
+            eq = !((fixed->nw_proto ^ wild.flow.nw_proto)
+                   & wild.wc.masks.nw_proto);
+        } else if (f_idx == CLS_F_IDX_DL_TYPE) {
+            eq = !((fixed->dl_type ^ wild.flow.dl_type)
+                   & wild.wc.masks.dl_type);
+        } else if (f_idx == CLS_F_IDX_IN_PORT) {
+            eq = !((fixed->in_port ^ wild.flow.in_port)
+                   & wild.wc.masks.in_port);
         } else {
             NOT_REACHED();
         }
@@ -251,12 +263,17 @@ tcls_delete_matches(struct tcls *cls, const struct cls_rule *target)
 
     for (i = 0; i < cls->n_rules; ) {
         struct test_rule *pos = cls->rules[i];
-        if (!flow_wildcards_has_extra(&pos->cls_rule.wc, &target->wc)
-            && match(target, &pos->cls_rule.flow)) {
-            tcls_remove(cls, pos);
-        } else {
-            i++;
+        if (!minimask_has_extra(&pos->cls_rule.match.mask,
+                                &target->match.mask)) {
+            struct flow flow;
+
+            miniflow_expand(&pos->cls_rule.match.flow, &flow);
+            if (match(target, &flow)) {
+                tcls_remove(cls, pos);
+                continue;
+            }
         }
+        i++;
     }
 }
 
@@ -377,6 +394,7 @@ compare_classifiers(struct classifier *cls, struct tcls *tcls)
         unsigned int x;
 
         x = rand () % N_FLOW_VALUES;
+        memset(&flow, 0, sizeof flow);
         flow.nw_src = nw_src_values[get_value(&x, N_NW_SRC_VALUES)];
         flow.nw_dst = nw_dst_values[get_value(&x, N_NW_DST_VALUES)];
         flow.tun_id = tun_id_values[get_value(&x, N_TUN_ID_VALUES)];
@@ -415,7 +433,7 @@ destroy_classifier(struct classifier *cls)
     cls_cursor_init(&cursor, cls, NULL);
     CLS_CURSOR_FOR_EACH_SAFE (rule, next_rule, cls_rule, &cursor) {
         classifier_remove(cls, &rule->cls_rule);
-        free(rule);
+        free_rule(rule);
     }
     classifier_destroy(cls);
 }
@@ -470,40 +488,67 @@ make_rule(int wc_fields, unsigned int priority, int value_pat)
 {
     const struct cls_field *f;
     struct test_rule *rule;
+    struct match match;
 
-    rule = xzalloc(sizeof *rule);
-    cls_rule_init_catchall(&rule->cls_rule, wc_fields ? priority : UINT_MAX);
+    match_init_catchall(&match);
     for (f = &cls_fields[0]; f < &cls_fields[CLS_N_FIELDS]; f++) {
         int f_idx = f - cls_fields;
         int value_idx = (value_pat & (1u << f_idx)) != 0;
-        memcpy((char *) &rule->cls_rule.flow + f->ofs,
+        memcpy((char *) &match.flow + f->ofs,
                values[f_idx][value_idx], f->len);
 
-        if (f->wildcards) {
-            rule->cls_rule.wc.wildcards &= ~f->wildcards;
-        } else if (f_idx == CLS_F_IDX_NW_SRC) {
-            rule->cls_rule.wc.nw_src_mask = htonl(UINT32_MAX);
+        if (f_idx == CLS_F_IDX_NW_SRC) {
+            match.wc.masks.nw_src = htonl(UINT32_MAX);
         } else if (f_idx == CLS_F_IDX_NW_DST) {
-            rule->cls_rule.wc.nw_dst_mask = htonl(UINT32_MAX);
+            match.wc.masks.nw_dst = htonl(UINT32_MAX);
         } else if (f_idx == CLS_F_IDX_TP_SRC) {
-            rule->cls_rule.wc.tp_src_mask = htons(UINT16_MAX);
+            match.wc.masks.tp_src = htons(UINT16_MAX);
         } else if (f_idx == CLS_F_IDX_TP_DST) {
-            rule->cls_rule.wc.tp_dst_mask = htons(UINT16_MAX);
+            match.wc.masks.tp_dst = htons(UINT16_MAX);
         } else if (f_idx == CLS_F_IDX_DL_SRC) {
-            memset(rule->cls_rule.wc.dl_src_mask, 0xff, ETH_ADDR_LEN);
+            memset(match.wc.masks.dl_src, 0xff, ETH_ADDR_LEN);
         } else if (f_idx == CLS_F_IDX_DL_DST) {
-            memset(rule->cls_rule.wc.dl_dst_mask, 0xff, ETH_ADDR_LEN);
+            memset(match.wc.masks.dl_dst, 0xff, ETH_ADDR_LEN);
         } else if (f_idx == CLS_F_IDX_VLAN_TCI) {
-            rule->cls_rule.wc.vlan_tci_mask = htons(UINT16_MAX);
+            match.wc.masks.vlan_tci = htons(UINT16_MAX);
         } else if (f_idx == CLS_F_IDX_TUN_ID) {
-            rule->cls_rule.wc.tun_id_mask = htonll(UINT64_MAX);
+            match.wc.masks.tun_id = htonll(UINT64_MAX);
         } else if (f_idx == CLS_F_IDX_METADATA) {
-            rule->cls_rule.wc.metadata_mask = htonll(UINT64_MAX);
+            match.wc.masks.metadata = htonll(UINT64_MAX);
+        } else if (f_idx == CLS_F_IDX_NW_DSCP) {
+            match.wc.masks.nw_tos |= IP_DSCP_MASK;
+        } else if (f_idx == CLS_F_IDX_NW_PROTO) {
+            match.wc.masks.nw_proto = UINT8_MAX;
+        } else if (f_idx == CLS_F_IDX_DL_TYPE) {
+            match.wc.masks.dl_type = htons(UINT16_MAX);
+        } else if (f_idx == CLS_F_IDX_IN_PORT) {
+            match.wc.masks.in_port = UINT16_MAX;
         } else {
             NOT_REACHED();
         }
     }
+
+    rule = xzalloc(sizeof *rule);
+    cls_rule_init(&rule->cls_rule, &match, wc_fields ? priority : UINT_MAX);
     return rule;
+}
+
+static struct test_rule *
+clone_rule(const struct test_rule *src)
+{
+    struct test_rule *dst;
+
+    dst = xmalloc(sizeof *dst);
+    dst->aux = src->aux;
+    cls_rule_clone(&dst->cls_rule, &src->cls_rule);
+    return dst;
+}
+
+static void
+free_rule(struct test_rule *rule)
+{
+    cls_rule_destroy(&rule->cls_rule);
+    free(rule);
 }
 
 static void
@@ -516,7 +561,20 @@ shuffle(unsigned int *p, size_t n)
         *q = tmp;
     }
 }
+
+static void
+shuffle_u32s(uint32_t *p, size_t n)
+{
+    for (; n > 1; n--, p++) {
+        uint32_t *q = &p[rand() % n];
+        uint32_t tmp = *p;
+        *p = *q;
+        *q = tmp;
+    }
+}
 
+/* Classifier tests. */
+
 /* Tests an empty classifier. */
 static void
 test_empty(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
@@ -568,7 +626,7 @@ test_single_rule(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
         assert(tcls_is_empty(&tcls));
         compare_classifiers(&cls, &tcls);
 
-        free(rule);
+        free_rule(rule);
         classifier_destroy(&cls);
         tcls_destroy(&tcls);
     }
@@ -603,7 +661,7 @@ test_rule_replacement(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
         tcls_insert(&tcls, rule2);
         assert(test_rule_from_cls_rule(
                    classifier_replace(&cls, &rule2->cls_rule)) == rule1);
-        free(rule1);
+        free_rule(rule1);
         check_tables(&cls, 1, 1, 0);
         compare_classifiers(&cls, &tcls);
         tcls_destroy(&tcls);
@@ -744,7 +802,7 @@ test_many_rules_in_one_list (int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
             tcls_destroy(&tcls);
 
             for (i = 0; i < N_RULES; i++) {
-                free(rules[i]);
+                free_rule(rules[i]);
             }
         } while (next_permutation(ops, ARRAY_SIZE(ops)));
         assert(n_permutations == (factorial(N_RULES * 2) >> N_RULES));
@@ -757,7 +815,7 @@ count_ones(unsigned long int x)
     int n = 0;
 
     while (x) {
-        x &= x - 1;
+        x = zero_rightmost_1bit(x);
         n++;
     }
 
@@ -822,7 +880,7 @@ test_many_rules_in_one_table(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
         for (i = 0; i < N_RULES; i++) {
             tcls_remove(&tcls, tcls_rules[i]);
             classifier_remove(&cls, &rules[i]->cls_rule);
-            free(rules[i]);
+            free_rule(rules[i]);
 
             check_tables(&cls, i < N_RULES - 1, N_RULES - (i + 1), 0);
             compare_classifiers(&cls, &tcls);
@@ -881,18 +939,17 @@ test_many_rules_in_n_tables(int n_tables)
             struct test_rule *target;
             struct cls_cursor cursor;
 
-            target = xmemdup(tcls.rules[rand() % tcls.n_rules],
-                             sizeof(struct test_rule));
+            target = clone_rule(tcls.rules[rand() % tcls.n_rules]);
 
             cls_cursor_init(&cursor, &cls, &target->cls_rule);
             CLS_CURSOR_FOR_EACH_SAFE (rule, next_rule, cls_rule, &cursor) {
                 classifier_remove(&cls, &rule->cls_rule);
-                free(rule);
+                free_rule(rule);
             }
             tcls_delete_matches(&tcls, &target->cls_rule);
             compare_classifiers(&cls, &tcls);
             check_tables(&cls, -1, -1, -1);
-            free(target);
+            free_rule(target);
         }
 
         destroy_classifier(&cls);
@@ -912,7 +969,301 @@ test_many_rules_in_five_tables(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
     test_many_rules_in_n_tables(5);
 }
 
+/* Miniflow tests. */
+
+static uint32_t
+random_value(void)
+{
+    static const uint32_t values[] =
+        { 0xffffffff, 0xaaaaaaaa, 0x55555555, 0x80000000,
+          0x00000001, 0xface0000, 0x00d00d1e, 0xdeadbeef };
+
+    return values[random_uint32() % ARRAY_SIZE(values)];
+}
+
+static bool
+choose(unsigned int n, unsigned int *idxp)
+{
+    if (*idxp < n) {
+        return true;
+    } else {
+        *idxp -= n;
+        return false;
+    }
+}
+
+static bool
+init_consecutive_values(int n_consecutive, struct flow *flow,
+                        unsigned int *idxp)
+{
+    uint32_t *flow_u32 = (uint32_t *) flow;
+
+    if (choose(FLOW_U32S - n_consecutive + 1, idxp)) {
+        int i;
+
+        for (i = 0; i < n_consecutive; i++) {
+            flow_u32[*idxp + i] = random_value();
+        }
+        return true;
+    } else {
+        return false;
+    }
+}
+
+static bool
+next_random_flow(struct flow *flow, unsigned int idx)
+{
+    uint32_t *flow_u32 = (uint32_t *) flow;
+    int i;
+
+    memset(flow, 0, sizeof *flow);
+
+    /* Empty flow. */
+    if (choose(1, &idx)) {
+        return true;
+    }
+
+    /* All flows with a small number of consecutive nonzero values. */
+    for (i = 1; i <= 4; i++) {
+        if (init_consecutive_values(i, flow, &idx)) {
+            return true;
+        }
+    }
+
+    /* All flows with a large number of consecutive nonzero values. */
+    for (i = FLOW_U32S - 4; i <= FLOW_U32S; i++) {
+        if (init_consecutive_values(i, flow, &idx)) {
+            return true;
+        }
+    }
+
+    /* All flows with exactly two nonconsecutive nonzero values. */
+    if (choose((FLOW_U32S - 1) * (FLOW_U32S - 2) / 2, &idx)) {
+        int ofs1;
+
+        for (ofs1 = 0; ofs1 < FLOW_U32S - 2; ofs1++) {
+            int ofs2;
+
+            for (ofs2 = ofs1 + 2; ofs2 < FLOW_U32S; ofs2++) {
+                if (choose(1, &idx)) {
+                    flow_u32[ofs1] = random_value();
+                    flow_u32[ofs2] = random_value();
+                    return true;
+                }
+            }
+        }
+        NOT_REACHED();
+    }
+
+    /* 16 randomly chosen flows with N >= 3 nonzero values. */
+    if (choose(16 * (FLOW_U32S - 4), &idx)) {
+        int n = idx / 16 + 3;
+        int i;
+
+        for (i = 0; i < n; i++) {
+            flow_u32[i] = random_value();
+        }
+        shuffle_u32s(flow_u32, FLOW_U32S);
+
+        return true;
+    }
+
+    return false;
+}
+
+static void
+any_random_flow(struct flow *flow)
+{
+    static unsigned int max;
+    if (!max) {
+        while (next_random_flow(flow, max)) {
+            max++;
+        }
+    }
+
+    next_random_flow(flow, random_range(max));
+}
+
+static void
+toggle_masked_flow_bits(struct flow *flow, const struct flow_wildcards *mask)
+{
+    const uint32_t *mask_u32 = (const uint32_t *) &mask->masks;
+    uint32_t *flow_u32 = (uint32_t *) flow;
+    int i;
+
+    for (i = 0; i < FLOW_U32S; i++) {
+        if (mask_u32[i] != 0) {
+            uint32_t bit;
+
+            do {
+                bit = 1u << random_range(32);
+            } while (!(bit & mask_u32[i]));
+            flow_u32[i] ^= bit;
+        }
+    }
+}
+
+static void
+wildcard_extra_bits(struct flow_wildcards *mask)
+{
+    uint32_t *mask_u32 = (uint32_t *) &mask->masks;
+    int i;
+
+    for (i = 0; i < FLOW_U32S; i++) {
+        if (mask_u32[i] != 0) {
+            uint32_t bit;
+
+            do {
+                bit = 1u << random_range(32);
+            } while (!(bit & mask_u32[i]));
+            mask_u32[i] &= ~bit;
+        }
+    }
+}
+
+static void
+test_miniflow(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
+{
+    struct flow flow;
+    unsigned int idx;
+
+    random_set_seed(0xb3faca38);
+    for (idx = 0; next_random_flow(&flow, idx); idx++) {
+        const uint32_t *flow_u32 = (const uint32_t *) &flow;
+        struct miniflow miniflow, miniflow2, miniflow3;
+        struct flow flow2, flow3;
+        struct flow_wildcards mask;
+        struct minimask minimask;
+        int i;
+
+        /* Convert flow to miniflow. */
+        miniflow_init(&miniflow, &flow);
+
+        /* Check that the flow equals its miniflow. */
+        assert(miniflow_get_vid(&miniflow) == vlan_tci_to_vid(flow.vlan_tci));
+        for (i = 0; i < FLOW_U32S; i++) {
+            assert(miniflow_get(&miniflow, i) == flow_u32[i]);
+        }
+
+        /* Check that the miniflow equals itself. */
+        assert(miniflow_equal(&miniflow, &miniflow));
+
+        /* Convert miniflow back to flow and verify that it's the same. */
+        miniflow_expand(&miniflow, &flow2);
+        assert(flow_equal(&flow, &flow2));
+
+        /* Check that copying a miniflow works properly. */
+        miniflow_clone(&miniflow2, &miniflow);
+        assert(miniflow_equal(&miniflow, &miniflow2));
+        assert(miniflow_hash(&miniflow, 0) == miniflow_hash(&miniflow2, 0));
+        miniflow_expand(&miniflow2, &flow3);
+        assert(flow_equal(&flow, &flow3));
+
+        /* Check that masked matches work as expected for identical flows and
+         * miniflows. */
+        do {
+            next_random_flow(&mask.masks, 1);
+        } while (flow_wildcards_is_catchall(&mask));
+        minimask_init(&minimask, &mask);
+        assert(minimask_is_catchall(&minimask)
+               == flow_wildcards_is_catchall(&mask));
+        assert(miniflow_equal_in_minimask(&miniflow, &miniflow2, &minimask));
+        assert(miniflow_equal_flow_in_minimask(&miniflow, &flow2, &minimask));
+        assert(miniflow_hash_in_minimask(&miniflow, &minimask, 0x12345678) ==
+               flow_hash_in_minimask(&flow, &minimask, 0x12345678));
+
+        /* Check that masked matches work as expected for differing flows and
+         * miniflows. */
+        toggle_masked_flow_bits(&flow2, &mask);
+        assert(!miniflow_equal_flow_in_minimask(&miniflow, &flow2, &minimask));
+        miniflow_init(&miniflow3, &flow2);
+        assert(!miniflow_equal_in_minimask(&miniflow, &miniflow3, &minimask));
+
+        /* Clean up. */
+        miniflow_destroy(&miniflow);
+        miniflow_destroy(&miniflow2);
+        miniflow_destroy(&miniflow3);
+        minimask_destroy(&minimask);
+    }
+}
+
+static void
+test_minimask_has_extra(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
+{
+    struct flow_wildcards catchall;
+    struct minimask minicatchall;
+    struct flow flow;
+    unsigned int idx;
+
+    flow_wildcards_init_catchall(&catchall);
+    minimask_init(&minicatchall, &catchall);
+    assert(minimask_is_catchall(&minicatchall));
+
+    random_set_seed(0x2ec7905b);
+    for (idx = 0; next_random_flow(&flow, idx); idx++) {
+        struct flow_wildcards mask;
+        struct minimask minimask;
+
+        mask.masks = flow;
+        minimask_init(&minimask, &mask);
+        assert(!minimask_has_extra(&minimask, &minimask));
+        assert(minimask_has_extra(&minicatchall, &minimask)
+               == !minimask_is_catchall(&minimask));
+        if (!minimask_is_catchall(&minimask)) {
+            struct minimask minimask2;
+
+            wildcard_extra_bits(&mask);
+            minimask_init(&minimask2, &mask);
+            assert(minimask_has_extra(&minimask2, &minimask));
+            assert(!minimask_has_extra(&minimask, &minimask2));
+            minimask_destroy(&minimask2);
+        }
+
+        minimask_destroy(&minimask);
+    }
+}
+
+static void
+test_minimask_combine(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
+{
+    struct flow_wildcards catchall;
+    struct minimask minicatchall;
+    struct flow flow;
+    unsigned int idx;
+
+    flow_wildcards_init_catchall(&catchall);
+    minimask_init(&minicatchall, &catchall);
+    assert(minimask_is_catchall(&minicatchall));
+
+    random_set_seed(0x181bf0cd);
+    for (idx = 0; next_random_flow(&flow, idx); idx++) {
+        struct minimask minimask, minimask2, minicombined;
+        struct flow_wildcards mask, mask2, combined, combined2;
+        uint32_t storage[FLOW_U32S];
+        struct flow flow2;
+
+        mask.masks = flow;
+        minimask_init(&minimask, &mask);
+
+        minimask_combine(&minicombined, &minimask, &minicatchall, storage);
+        assert(minimask_is_catchall(&minicombined));
+
+        any_random_flow(&flow2);
+        mask2.masks = flow2;
+        minimask_init(&minimask2, &mask2);
+
+        minimask_combine(&minicombined, &minimask, &minimask2, storage);
+        flow_wildcards_combine(&combined, &mask, &mask2);
+        minimask_expand(&minicombined, &combined2);
+        assert(flow_wildcards_equal(&combined, &combined2));
+
+        minimask_destroy(&minimask);
+        minimask_destroy(&minimask2);
+    }
+}
+
 static const struct command commands[] = {
+    /* Classifier tests. */
     {"empty", 0, 0, test_empty},
     {"destroy-null", 0, 0, test_destroy_null},
     {"single-rule", 0, 0, test_single_rule},
@@ -921,6 +1272,12 @@ static const struct command commands[] = {
     {"many-rules-in-one-table", 0, 0, test_many_rules_in_one_table},
     {"many-rules-in-two-tables", 0, 0, test_many_rules_in_two_tables},
     {"many-rules-in-five-tables", 0, 0, test_many_rules_in_five_tables},
+
+    /* Miniflow and minimask tests. */
+    {"miniflow", 0, 0, test_miniflow},
+	{"minimask_has_extra", 0, 0, test_minimask_has_extra},
+	{"minimask_combine", 0, 0, test_minimask_combine},
+
     {NULL, 0, 0, NULL},
 };
 

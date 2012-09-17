@@ -24,11 +24,11 @@
 #include "classifier.h"
 #include "compiler.h"
 #include "flow.h"
+#include "match.h"
 #include "netdev.h"
 #include "openflow/nicira-ext.h"
 #include "openvswitch/types.h"
 
-struct cls_rule;
 struct ofpbuf;
 
 /* Port numbers. */
@@ -96,7 +96,7 @@ enum ofputil_protocol ofputil_protocol_set_base(
 const char *ofputil_protocol_to_string(enum ofputil_protocol);
 char *ofputil_protocols_to_string(enum ofputil_protocol);
 enum ofputil_protocol ofputil_protocols_from_string(const char *);
-enum ofputil_protocol ofputil_usable_protocols(const struct cls_rule *);
+enum ofputil_protocol ofputil_usable_protocols(const struct match *);
 
 struct ofpbuf *ofputil_encode_set_protocol(enum ofputil_protocol current,
                                            enum ofputil_protocol want,
@@ -110,23 +110,18 @@ const char *ofputil_nx_flow_format_to_string(enum nx_flow_format);
 
 /* Work with ofp10_match. */
 void ofputil_wildcard_from_ofpfw10(uint32_t ofpfw, struct flow_wildcards *);
-void ofputil_cls_rule_from_ofp10_match(const struct ofp10_match *,
-                                       unsigned int priority,
-                                       struct cls_rule *);
-void ofputil_normalize_rule(struct cls_rule *);
-void ofputil_normalize_rule_quiet(struct cls_rule *);
-void ofputil_cls_rule_to_ofp10_match(const struct cls_rule *,
-                                     struct ofp10_match *);
+void ofputil_match_from_ofp10_match(const struct ofp10_match *,
+                                    struct match *);
+void ofputil_normalize_match(struct match *);
+void ofputil_normalize_match_quiet(struct match *);
+void ofputil_match_to_ofp10_match(const struct match *, struct ofp10_match *);
 
 /* Work with ofp11_match. */
-enum ofperr ofputil_pull_ofp11_match(struct ofpbuf *, unsigned int priority,
-                                     struct cls_rule *,
+enum ofperr ofputil_pull_ofp11_match(struct ofpbuf *, struct match *,
                                      uint16_t *padded_match_len);
-enum ofperr ofputil_cls_rule_from_ofp11_match(const struct ofp11_match *,
-                                              unsigned int priority,
-                                              struct cls_rule *);
-void ofputil_cls_rule_to_ofp11_match(const struct cls_rule *,
-                                     struct ofp11_match *);
+enum ofperr ofputil_match_from_ofp11_match(const struct ofp11_match *,
+                                           struct match *);
+void ofputil_match_to_ofp11_match(const struct match *, struct ofp11_match *);
 
 /* dl_type translation between OpenFlow and 'struct flow' format. */
 ovs_be16 ofputil_dl_type_to_openflow(ovs_be16 flow_dl_type);
@@ -160,7 +155,8 @@ struct ofpbuf *ofputil_make_flow_mod_table_id(bool flow_mod_table_id);
  * NXM Delete    <used>     <used>        -
  */
 struct ofputil_flow_mod {
-    struct cls_rule cr;
+    struct match match;
+    unsigned int priority;
     ovs_be64 cookie;         /* Cookie bits to match. */
     ovs_be64 cookie_mask;    /* 1-bit in each 'cookie' bit to match. */
     ovs_be64 new_cookie;     /* New cookie to install or -1. */
@@ -188,7 +184,7 @@ enum ofputil_protocol ofputil_flow_mod_usable_protocols(
 /* Flow stats or aggregate stats request, independent of protocol. */
 struct ofputil_flow_stats_request {
     bool aggregate;             /* Aggregate results? */
-    struct cls_rule match;
+    struct match match;
     ovs_be64 cookie;
     ovs_be64 cookie_mask;
     uint16_t out_port;
@@ -204,11 +200,12 @@ enum ofputil_protocol ofputil_flow_stats_request_usable_protocols(
 
 /* Flow stats reply, independent of protocol. */
 struct ofputil_flow_stats {
-    struct cls_rule rule;
+    struct match match;
     ovs_be64 cookie;
     uint8_t table_id;
     uint32_t duration_sec;
     uint32_t duration_nsec;
+    uint16_t priority;
     uint16_t idle_timeout;
     uint16_t hard_timeout;
     int idle_age;               /* Seconds since last packet, -1 if unknown. */
@@ -242,7 +239,8 @@ enum ofperr ofputil_decode_aggregate_stats_reply(
 
 /* Flow removed message, independent of protocol. */
 struct ofputil_flow_removed {
-    struct cls_rule rule;
+    struct match match;
+    uint16_t priority;
     ovs_be64 cookie;
     uint8_t reason;             /* One of OFPRR_*. */
     uint32_t duration_sec;
@@ -399,6 +397,7 @@ enum ofputil_action_bitmap {
     OFPUTIL_A_GROUP          = 1 << 24,
     OFPUTIL_A_SET_NW_TTL     = 1 << 25,
     OFPUTIL_A_DEC_NW_TTL     = 1 << 26,
+    OFPUTIL_A_SET_FIELD      = 1 << 27,
 };
 
 /* Abstract ofp_switch_features. */
@@ -451,13 +450,22 @@ enum ofperr ofputil_decode_port_mod(const struct ofp_header *,
 struct ofpbuf *ofputil_encode_port_mod(const struct ofputil_port_mod *,
                                        enum ofputil_protocol);
 
+/* Abstract table stats.
+ *
+ * For now we use ofp12_table_stats as a superset of the other protocol
+ * versions' table stats. */
+
+struct ofpbuf *ofputil_encode_table_stats_reply(
+    const struct ofp12_table_stats[], int n,
+    const struct ofp_header *request);
+
 /* Abstract nx_flow_monitor_request. */
 struct ofputil_flow_monitor_request {
     uint32_t id;
     enum nx_flow_monitor_flags flags;
     uint16_t out_port;
     uint8_t table_id;
-    struct cls_rule match;
+    struct match match;
 };
 
 int ofputil_decode_flow_monitor_request(struct ofputil_flow_monitor_request *,
@@ -475,7 +483,8 @@ struct ofputil_flow_update {
     uint16_t hard_timeout;
     uint8_t table_id;
     ovs_be64 cookie;
-    struct cls_rule *match;
+    struct match *match;
+    uint16_t priority;
     struct ofpact *ofpacts;
     size_t ofpacts_len;
 
@@ -551,6 +560,7 @@ enum OVS_PACKED_ENUM ofputil_action_code {
     OFPUTIL_ACTION_INVALID,
 #define OFPAT10_ACTION(ENUM, STRUCT, NAME)           OFPUTIL_##ENUM,
 #define OFPAT11_ACTION(ENUM, STRUCT, NAME)           OFPUTIL_##ENUM,
+#define OFPAT12_ACTION(ENUM, STRUCT, NAME)           OFPUTIL_##ENUM,
 #define NXAST_ACTION(ENUM, STRUCT, EXTENSIBLE, NAME) OFPUTIL_##ENUM,
 #include "ofp-util.def"
 };
@@ -559,6 +569,7 @@ enum OVS_PACKED_ENUM ofputil_action_code {
 enum {
 #define OFPAT10_ACTION(ENUM, STRUCT, NAME)           + 1
 #define OFPAT11_ACTION(ENUM, STRUCT, NAME)           + 1
+#define OFPAT12_ACTION(ENUM, STRUCT, NAME)           + 1
 #define NXAST_ACTION(ENUM, STRUCT, EXTENSIBLE, NAME) + 1
     OFPUTIL_N_ACTIONS = 1
 #include "ofp-util.def"
@@ -586,6 +597,9 @@ void *ofputil_put_action(enum ofputil_action_code, struct ofpbuf *buf);
     void ofputil_init_##ENUM(struct STRUCT *);          \
     struct STRUCT *ofputil_put_##ENUM(struct ofpbuf *);
 #define OFPAT11_ACTION(ENUM, STRUCT, NAME)              \
+    void ofputil_init_##ENUM(struct STRUCT *);          \
+    struct STRUCT *ofputil_put_##ENUM(struct ofpbuf *);
+#define OFPAT12_ACTION(ENUM, STRUCT, NAME)              \
     void ofputil_init_##ENUM(struct STRUCT *);          \
     struct STRUCT *ofputil_put_##ENUM(struct ofpbuf *);
 #define NXAST_ACTION(ENUM, STRUCT, EXTENSIBLE, NAME)    \

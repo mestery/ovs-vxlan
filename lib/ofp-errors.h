@@ -45,6 +45,19 @@ struct ofpbuf;
 
 #define OFPERR_OFS (1 << 30)
 
+/* OpenFlow error codes.
+ *
+ * The comments below are parsed by the extract-ofp-errors program at build
+ * time and used to determine the mapping between "enum ofperr" constants and
+ * error type/code values used in the OpenFlow protocol:
+ *
+ *   - The first part of each comment specifies OpenFlow type/code for each
+ *     protocol that supports the error.
+ *
+ *   - Additional text is a human-readable description of the meaning of each
+ *     error, used to explain the error to the user.  Any text enclosed in
+ *     square brackets is omitted; this can be used to explain rationale for
+ *     choice of error codes in the case where this is desirable. */
 enum ofperr {
 /* Expected duplications. */
 
@@ -99,13 +112,19 @@ enum ofperr {
     /* OF1.0+(1,8).  Specified buffer does not exist. */
     OFPERR_OFPBRC_BUFFER_UNKNOWN,
 
-    /* OF1.1+(1,9).  Specified table-id invalid or does not exist. */
+    /* NX1.0(1,512), OF1.1+(1,9).  Specified table-id invalid or does not exist.
+     * [ A non-standard error (1,512), formerly OFPERR_NXBRC_BAD_TABLE_ID,
+     *   is used for OpenFlow 1.0 as there seems to be no appropriste error
+     *   code defined the specification. ] */
     OFPERR_OFPBRC_BAD_TABLE_ID,
 
     /* OF1.2+(1,10).  Denied because controller is slave. */
     OFPERR_OFPBRC_IS_SLAVE,
 
-    /* OF1.2+(1,11).  Invalid port. */
+    /* NX1.0(1,514), NX1.1(1,514), OF1.2+(1,11).  Invalid port.
+     * [ A non-standard error (1,514), formerly
+     *   OFPERR_NXBRC_BAD_IN_PORT is used for OpenFlow 1.0 and 1.1 as there
+     *   seems to be no appropriste error code defined the specifications. ] */
     OFPERR_OFPBRC_BAD_PORT,
 
     /* OF1.2+(1,12).  Invalid packet in packet-out. */
@@ -117,12 +136,6 @@ enum ofperr {
     /* NX1.0+(1,257).  The nxm_type, or nxm_type taken in combination with
      * nxm_hasmask or nxm_length or both, is invalid or not implemented. */
     OFPERR_NXBRC_NXM_BAD_TYPE,
-
-    /* NX1.0+(1,512).  A request specified a nonexistent table ID. */
-    OFPERR_NXBRC_BAD_TABLE_ID,
-
-    /* NX1.0+(1,514).  The in_port in an ofp_packet_out request is invalid. */
-    OFPERR_NXBRC_BAD_IN_PORT,
 
     /* NX1.0+(1,515).  Must-be-zero field had nonzero value. */
     OFPERR_NXBRC_MUST_BE_ZERO,
@@ -238,9 +251,6 @@ enum ofperr {
     /* OF1.2+(3,8).  Permissions error. */
     OFPERR_OFPBIC_EPERM,
 
-    /* NX1.1+(3,256).  Duplicate instruction type in set of instructions. */
-    OFPERR_NXBIC_DUP_TYPE,
-
 /* ## --------------- ## */
 /* ## OFPET_BAD_MATCH ## */
 /* ## --------------- ## */
@@ -271,7 +281,7 @@ enum ofperr {
     /* OF1.1+(4,6).  Unsupported field in the match. */
     OFPERR_OFPBMC_BAD_FIELD,
 
-    /* NX1.0(1,258), NX1.1(1,258), OF1.2+(4,7).  Unsupported value in a match
+    /* NX1.0(1,258), OF1.1+(4,7).  Unsupported value in a match
      * field. */
     OFPERR_OFPBMC_BAD_VALUE,
 
@@ -339,9 +349,6 @@ enum ofperr {
      * "command" field of struct ofp_flow_mod, when the nxt_flow_mod_table_id
      * extension is enabled. */
     OFPERR_NXFMFC_BAD_TABLE_ID,
-
-    /* NX1.0+(3,258).  'out_group' specified but groups not yet supported. */
-    OFPERR_NXFMFC_GROUPS_NOT_SUPPORTED,
 
 /* ## ---------------------- ## */
 /* ## OFPET_GROUP_MOD_FAILED ## */
