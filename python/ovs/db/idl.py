@@ -758,6 +758,8 @@ class Transaction(object):
                 row = self._txn_rows.get(uuid, None)
                 if row and row._data is None:
                     return ["named-uuid", _uuid_name_from_uuid(uuid)]
+            else:
+                return [self._substitute_uuids(elem) for elem in json]
         return json
 
     def __disassemble(self):
@@ -1198,13 +1200,22 @@ class SchemaHelper(object):
     The location on disk of the schema used may be found in the
     'schema_location' variable."""
 
-    def __init__(self, location=None):
-        """Creates a new Schema object."""
+    def __init__(self, location=None, schema_json=None):
+        """Creates a new Schema object.
 
-        if location is None:
-            location = "%s/vswitch.ovsschema" % ovs.dirs.PKGDATADIR
+        'location' file path to ovs schema. None means default location
+        'schema_json' schema in json preresentation in memory
+        """
 
-        self.schema_location = location
+        if location and schema_json:
+            raise ValueError("both location and schema_json can't be "
+                             "specified. it's ambiguous.")
+        if schema_json is None:
+            if location is None:
+                location = "%s/vswitch.ovsschema" % ovs.dirs.PKGDATADIR
+            schema_json = ovs.json.from_file(location)
+
+        self.schema_json = schema_json
         self._tables = {}
         self._all = False
 
@@ -1224,6 +1235,15 @@ class SchemaHelper(object):
         columns = set(columns) | self._tables.get(table, set())
         self._tables[table] = columns
 
+    def register_table(self, table):
+        """Registers interest in the given all columns of 'table'. Future calls
+        to get_idl_schema() will include all columns of 'table'.
+
+        'table' must be a string
+        """
+        assert type(table) is str
+        self._tables[table] = set()  # empty set means all columns in the table
+
     def register_all(self):
         """Registers interest in every column of every table."""
         self._all = True
@@ -1233,8 +1253,8 @@ class SchemaHelper(object):
         object based on columns registered using the register_columns()
         function."""
 
-        schema = ovs.db.schema.DbSchema.from_json(
-            ovs.json.from_file(self.schema_location))
+        schema = ovs.db.schema.DbSchema.from_json(self.schema_json)
+        self.schema_json = None
 
         if not self._all:
             schema_tables = {}
@@ -1248,6 +1268,10 @@ class SchemaHelper(object):
     def _keep_table_columns(self, schema, table_name, columns):
         assert table_name in schema.tables
         table = schema.tables[table_name]
+
+        if not columns:
+            # empty set means all columns in the table
+            return table
 
         new_columns = {}
         for column_name in columns:

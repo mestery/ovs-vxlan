@@ -106,7 +106,12 @@ enum oxm12_ofb_match_fields {
     OFPXMT12_OFB_IPV6_ND_TLL,    /* Target link-layer for ND. */
     OFPXMT12_OFB_MPLS_LABEL,     /* MPLS label. */
     OFPXMT12_OFB_MPLS_TC,        /* MPLS TC. */
+
+    /* End Marker */
+    OFPXMT12_OFB_MAX,
 };
+
+#define OFPXMT12_MASK ((1ULL << OFPXMT12_OFB_MAX) - 1)
 
 /* OXM implementation makes use of NXM as they are the same format
  * with different field definitions
@@ -216,12 +221,11 @@ enum ofp12_controller_max_len {
 struct ofp12_action_set_field {
     ovs_be16 type;                  /* OFPAT12_SET_FIELD. */
     ovs_be16 len;                   /* Length is padded to 64 bits. */
+    ovs_be32 dst;                   /* OXM TLV header */
     /* Followed by:
-     * - Exactly oxm_len bytes containing a single OXM TLV, then
      * - Exactly ((oxm_len + 4) + 7)/8*8 - (oxm_len + 4) (between 0 and 7)
      *   bytes of all-zero bytes
      */
-    uint8_t field[4];               /* OXM TLV - Make compiler happy */
 };
 OFP_ASSERT(sizeof(struct ofp12_action_set_field) == 8);
 
