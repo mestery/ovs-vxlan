@@ -464,28 +464,6 @@ def main():
         new_interfaces = {}
         for rec in idl.tables["Interface"].rows.itervalues():
             if rec.type == "ipsec_gre":
-<<<<<<< HEAD
-                name = rec.name
-                options = rec.options
-                peer_cert_name = "ovs-%s.pem" % (options.get("remote_ip"))
-                entry = {
-                    "remote_ip": options.get("remote_ip"),
-                    "local_ip": options.get("local_ip", "0.0.0.0/0"),
-                    "certificate": options.get("certificate"),
-                    "private_key": options.get("private_key"),
-                    "use_ssl_cert": options.get("use_ssl_cert"),
-                    "peer_cert": options.get("peer_cert"),
-                    "peer_cert_file": Racoon.cert_dir + "/" + peer_cert_name,
-                    "psk": options.get("psk")}
-
-                if entry["peer_cert"] and entry["psk"]:
-                    vlog.warn("both 'peer_cert' and 'psk' defined for %s"
-                              % name)
-                    continue
-                elif not entry["peer_cert"] and not entry["psk"]:
-                    vlog.warn("no 'peer_cert' or 'psk' defined for %s" % name)
-                    continue
-=======
                 tunnel_type = "gre"
             elif rec.type == "ipsec_vxlan":
                 tunnel_type = "vxlan"
@@ -494,6 +472,7 @@ def main():
 
             name = rec.name
             options = rec.options
+            peer_cert_name = "ovs-%s.pem" % (options.get("remote_ip"))
             entry = {
                 "remote_ip": options.get("remote_ip"),
                 "local_ip": options.get("local_ip", "0.0.0.0/0"),
@@ -501,17 +480,17 @@ def main():
                 "private_key": options.get("private_key"),
                 "use_ssl_cert": options.get("use_ssl_cert"),
                 "peer_cert": options.get("peer_cert"),
-                "psk": options.get("psk"),
+                "peer_cert_file": Racoon.cert_dir + "/" + peer_cert_name,
+                "psk": options.get("psk")},
                 "tunnel_type": tunnel_type }
 
             if entry["peer_cert"] and entry["psk"]:
                 vlog.warn("both 'peer_cert' and 'psk' defined for %s"
-                        % name)
+                              % name)
                 continue
             elif not entry["peer_cert"] and not entry["psk"]:
                 vlog.warn("no 'peer_cert' or 'psk' defined for %s" % name)
                 continue
->>>>>>> bd95b5d... vxlan: Add support for VXLAN-over-IPsec.
 
             # The "use_ssl_cert" option is deprecated and will
             # likely go away in the near future.
