@@ -2266,3 +2266,4 @@ module_exit(dp_cleanup);
 
 MODULE_DESCRIPTION("Open vSwitch switching datapath");
 MODULE_LICENSE("GPL");
+MODULE_VERSION(VERSION);
