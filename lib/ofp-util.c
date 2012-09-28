@@ -3569,9 +3569,9 @@ ofputil_port_from_string(const char *s)
 
             ds_init(&s);
             ofputil_format_port(port32, &s);
-            VLOG_WARN("port %u is better referred to as %s, for compatibility "
-                      "with future versions of OpenFlow",
-                      port32, ds_cstr(&s));
+            VLOG_WARN_ONCE("referring to port %s as %u is deprecated for "
+                           "compatibility with future versions of OpenFlow",
+                           ds_cstr(&s), port32);
             ds_destroy(&s);
 
             return port32;
@@ -3665,10 +3665,9 @@ ofputil_action_code_from_name(const char *name)
 {
     static const char *names[OFPUTIL_N_ACTIONS] = {
         NULL,
-#define OFPAT10_ACTION(ENUM, STRUCT, NAME)           NAME,
-#define OFPAT11_ACTION(ENUM, STRUCT, NAME)           NAME,
-#define OFPAT12_ACTION(ENUM, STRUCT, NAME)           NAME,
-#define NXAST_ACTION(ENUM, STRUCT, EXTENSIBLE, NAME) NAME,
+#define OFPAT10_ACTION(ENUM, STRUCT, NAME)             NAME,
+#define OFPAT11_ACTION(ENUM, STRUCT, EXTENSIBLE, NAME) NAME,
+#define NXAST_ACTION(ENUM, STRUCT, EXTENSIBLE, NAME)   NAME,
 #include "ofp-util.def"
     };
 
@@ -3694,10 +3693,10 @@ ofputil_put_action(enum ofputil_action_code code, struct ofpbuf *buf)
     case OFPUTIL_ACTION_INVALID:
         NOT_REACHED();
 
-#define OFPAT10_ACTION(ENUM, STRUCT, NAME)                    \
+#define OFPAT10_ACTION(ENUM, STRUCT, NAME)                  \
     case OFPUTIL_##ENUM: return ofputil_put_##ENUM(buf);
-#define OFPAT11_ACTION OFPAT10_ACTION
-#define OFPAT12_ACTION OFPAT10_ACTION
+#define OFPAT11_ACTION(ENUM, STRUCT, EXTENSIBLE, NAME)      \
+    case OFPUTIL_##ENUM: return ofputil_put_##ENUM(buf);
 #define NXAST_ACTION(ENUM, STRUCT, EXTENSIBLE, NAME)        \
     case OFPUTIL_##ENUM: return ofputil_put_##ENUM(buf);
 #include "ofp-util.def"
@@ -3721,8 +3720,8 @@ ofputil_put_action(enum ofputil_action_code code, struct ofpbuf *buf)
         ofputil_init_##ENUM(s);                                 \
         return s;                                               \
     }
-#define OFPAT11_ACTION OFPAT10_ACTION
-#define OFPAT12_ACTION OFPAT10_ACTION
+#define OFPAT11_ACTION(ENUM, STRUCT, EXTENSIBLE, NAME) \
+    OFPAT10_ACTION(ENUM, STRUCT, NAME)
 #define NXAST_ACTION(ENUM, STRUCT, EXTENSIBLE, NAME)            \
     void                                                        \
     ofputil_init_##ENUM(struct STRUCT *s)                       \

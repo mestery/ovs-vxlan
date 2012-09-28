@@ -2258,8 +2258,8 @@ handle_table_stats_request(struct ofconn *ofconn,
         sprintf(ots[i].name, "table%zu", i);
         ots[i].match = htonll(OFPXMT12_MASK);
         ots[i].wildcards = htonll(OFPXMT12_MASK);
-        ots[i].write_actions = htonl(OFPAT12_OUTPUT);
-        ots[i].apply_actions = htonl(OFPAT12_OUTPUT);
+        ots[i].write_actions = htonl(OFPAT11_OUTPUT);
+        ots[i].apply_actions = htonl(OFPAT11_OUTPUT);
         ots[i].write_setfields = htonll(OFPXMT12_MASK);
         ots[i].apply_setfields = htonll(OFPXMT12_MASK);
         ots[i].metadata_match = htonll(UINT64_MAX);
@@ -3298,11 +3298,10 @@ handle_flow_mod(struct ofconn *ofconn, const struct ofp_header *oh)
     }
 
     if (fm.flags & OFPFF10_EMERG) {
-    /* We do not support the OpenFlow 1.0 emergency flow cache, which is not
-     * required in OpenFlow 1.0.1 and removed from OpenFlow 1.1. */
-        /* We do not support the emergency flow cache.  It will hopefully get
-         * dropped from OpenFlow in the near future.  There is no good error
-         * code, so just state that the flow table is full. */
+        /* We do not support the OpenFlow 1.0 emergency flow cache, which
+         * is not required in OpenFlow 1.0.1 and removed from OpenFlow 1.1.
+         * There is no good error code, so just state that the flow table
+         * is full. */
         error = OFPERR_OFPFMFC_ALL_TABLES_FULL;
     }
     if (!error) {
