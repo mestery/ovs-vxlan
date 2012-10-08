@@ -1970,7 +1970,7 @@ rule_execute(struct rule *rule, uint16_t in_port, struct ofpbuf *packet)
 
     assert(ofpbuf_headroom(packet) >= sizeof(struct ofp_packet_in));
 
-    flow_extract(packet, 0, 0, in_port, &flow);
+    flow_extract(packet, 0, NULL, in_port, &flow);
     return rule->ofproto->ofproto_class->rule_execute(rule, &flow, packet);
 }
 
@@ -2147,7 +2147,7 @@ handle_packet_out(struct ofconn *ofconn, const struct ofp_header *oh)
     }
 
     /* Verify actions against packet, then send packet if successful. */
-    flow_extract(payload, 0, 0, po.in_port, &flow);
+    flow_extract(payload, 0, NULL, po.in_port, &flow);
     error = ofpacts_check(po.ofpacts, po.ofpacts_len, &flow, p->max_ports);
     if (!error) {
         error = p->ofproto_class->packet_out(p, payload, &flow,
@@ -3225,6 +3225,7 @@ ofproto_rule_send_removed(struct rule *rule, uint8_t reason)
     fr.priority = rule->cr.priority;
     fr.cookie = rule->flow_cookie;
     fr.reason = reason;
+    fr.table_id = rule->table_id;
     calc_flow_duration__(rule->created, time_msec(),
                          &fr.duration_sec, &fr.duration_nsec);
     fr.idle_timeout = rule->idle_timeout;

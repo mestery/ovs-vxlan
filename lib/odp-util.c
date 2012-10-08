@@ -1804,7 +1804,7 @@ odp_flow_key_to_flow(const struct nlattr *key, size_t key_len,
     }
 
     if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_TUN_ID)) {
-        flow->tun_id = nl_attr_get_be64(attrs[OVS_KEY_ATTR_TUN_ID]);
+        flow->tunnel.tun_id = nl_attr_get_be64(attrs[OVS_KEY_ATTR_TUN_ID]);
         expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_TUN_ID;
     }
 
@@ -1899,13 +1899,13 @@ static void
 commit_set_tun_id_action(const struct flow *flow, struct flow *base,
                          struct ofpbuf *odp_actions)
 {
-    if (base->tun_id == flow->tun_id) {
+    if (base->tunnel.tun_id == flow->tunnel.tun_id) {
         return;
     }
-    base->tun_id = flow->tun_id;
+    base->tunnel.tun_id = flow->tunnel.tun_id;
 
     commit_set_action(odp_actions, OVS_KEY_ATTR_TUN_ID,
-                      &base->tun_id, sizeof(base->tun_id));
+                      &base->tunnel.tun_id, sizeof(base->tunnel.tun_id));
 }
 
 static void

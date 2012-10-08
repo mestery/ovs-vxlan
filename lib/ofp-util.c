@@ -139,7 +139,7 @@ ofputil_match_from_ofp10_match(const struct ofp10_match *ofmatch,
     uint32_t ofpfw = ntohl(ofmatch->wildcards) & OFPFW10_ALL;
 
     /* Initialize match->wc. */
-    memset(match->flow.zeros, 0, sizeof match->flow.zeros);
+    memset(&match->flow, 0, sizeof match->flow);
     ofputil_wildcard_from_ofpfw10(ofpfw, &match->wc);
 
     /* Initialize most of match->flow. */
@@ -934,7 +934,7 @@ ofputil_usable_protocols(const struct match *match)
     }
 
     /* Only NXM supports matching tun_id. */
-    if (wc->masks.tun_id != htonll(0)) {
+    if (wc->masks.tunnel.tun_id != htonll(0)) {
         return OFPUTIL_P_NXM_ANY;
     }
 
@@ -1084,12 +1084,13 @@ ofputil_nx_flow_format_to_string(enum nx_flow_format flow_format)
 }
 
 struct ofpbuf *
-ofputil_make_set_packet_in_format(enum nx_packet_in_format packet_in_format)
+ofputil_make_set_packet_in_format(enum ofp_version ofp_version,
+                                  enum nx_packet_in_format packet_in_format)
 {
     struct nx_set_packet_in_format *spif;
     struct ofpbuf *msg;
 
-    msg = ofpraw_alloc(OFPRAW_NXT_SET_PACKET_IN_FORMAT, OFP10_VERSION, 0);
+    msg = ofpraw_alloc(OFPRAW_NXT_SET_PACKET_IN_FORMAT, ofp_version, 0);
     spif = ofpbuf_put_zeros(msg, sizeof *spif);
     spif->format = htonl(packet_in_format);
 
@@ -1913,7 +1914,7 @@ ofputil_decode_flow_removed(struct ofputil_flow_removed *fr,
         fr->priority = ntohs(ofr->priority);
         fr->cookie = ofr->cookie;
         fr->reason = ofr->reason;
-        /* XXX: ofr->table_id is ignored */
+        fr->table_id = ofr->table_id;
         fr->duration_sec = ntohl(ofr->duration_sec);
         fr->duration_nsec = ntohl(ofr->duration_nsec);
         fr->idle_timeout = ntohs(ofr->idle_timeout);
@@ -1929,6 +1930,7 @@ ofputil_decode_flow_removed(struct ofputil_flow_removed *fr,
         fr->priority = ntohs(ofr->priority);
         fr->cookie = ofr->cookie;
         fr->reason = ofr->reason;
+        fr->table_id = 255;
         fr->duration_sec = ntohl(ofr->duration_sec);
         fr->duration_nsec = ntohl(ofr->duration_nsec);
         fr->idle_timeout = ntohs(ofr->idle_timeout);
@@ -1952,6 +1954,7 @@ ofputil_decode_flow_removed(struct ofputil_flow_removed *fr,
         fr->priority = ntohs(nfr->priority);
         fr->cookie = nfr->cookie;
         fr->reason = nfr->reason;
+        fr->table_id = 255;
         fr->duration_sec = ntohl(nfr->duration_sec);
         fr->duration_nsec = ntohl(nfr->duration_nsec);
         fr->idle_timeout = ntohs(nfr->idle_timeout);
@@ -1985,7 +1988,7 @@ ofputil_encode_flow_removed(const struct ofputil_flow_removed *fr,
         ofr->cookie = fr->cookie;
         ofr->priority = htons(fr->priority);
         ofr->reason = fr->reason;
-        ofr->table_id = 0;
+        ofr->table_id = fr->table_id;
         ofr->duration_sec = htonl(fr->duration_sec);
         ofr->duration_nsec = htonl(fr->duration_nsec);
         ofr->idle_timeout = htons(fr->idle_timeout);
@@ -2053,7 +2056,7 @@ ofputil_decode_packet_in_finish(struct ofputil_packet_in *pin,
     pin->packet_len = b->size;
 
     pin->fmd.in_port = match->flow.in_port;
-    pin->fmd.tun_id = match->flow.tun_id;
+    pin->fmd.tun_id = match->flow.tunnel.tun_id;
     pin->fmd.metadata = match->flow.metadata;
     memcpy(pin->fmd.regs, match->flow.regs, sizeof pin->fmd.regs);
 }

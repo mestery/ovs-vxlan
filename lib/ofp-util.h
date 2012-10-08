@@ -131,7 +131,8 @@ ovs_be16 ofputil_dl_type_from_openflow(ovs_be16 ofp_dl_type);
 bool ofputil_packet_in_format_is_valid(enum nx_packet_in_format);
 int ofputil_packet_in_format_from_string(const char *);
 const char *ofputil_packet_in_format_to_string(enum nx_packet_in_format);
-struct ofpbuf *ofputil_make_set_packet_in_format(enum nx_packet_in_format);
+struct ofpbuf *ofputil_make_set_packet_in_format(enum ofp_version,
+                                                 enum nx_packet_in_format);
 
 /* NXT_FLOW_MOD_TABLE_ID extension. */
 struct ofpbuf *ofputil_make_flow_mod_table_id(bool flow_mod_table_id);
@@ -243,6 +244,7 @@ struct ofputil_flow_removed {
     uint16_t priority;
     ovs_be64 cookie;
     uint8_t reason;             /* One of OFPRR_*. */
+    uint8_t table_id;           /* 255 if message didn't include table ID. */
     uint32_t duration_sec;
     uint32_t duration_nsec;
     uint16_t idle_timeout;

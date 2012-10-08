@@ -63,7 +63,7 @@ ofp_packet_to_string(const void *data, size_t len)
     struct flow flow;
 
     ofpbuf_use_const(&buf, data, len);
-    flow_extract(&buf, 0, 0, 0, &flow);
+    flow_extract(&buf, 0, NULL, 0, &flow);
     flow_format(&ds, &flow);
 
     if (buf.l7) {
@@ -842,6 +842,10 @@ ofp_print_flow_removed(struct ds *string, const struct ofp_header *oh)
 
     ds_put_format(string, " reason=%s",
                   ofp_flow_removed_reason_to_string(fr.reason));
+
+    if (fr.table_id != 255) {
+        ds_put_format(string, " table_id=%"PRIu8, fr.table_id);
+    }
 
     if (fr.cookie != htonll(0)) {
         ds_put_format(string, " cookie:0x%"PRIx64, ntohll(fr.cookie));
