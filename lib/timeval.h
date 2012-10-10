@@ -36,21 +36,6 @@ BUILD_ASSERT_DECL(TYPE_IS_INTEGER(time_t));
  * ever encounter such a platform. */
 BUILD_ASSERT_DECL(TYPE_IS_SIGNED(time_t));
 
-/* On x86-64 systems, Linux avoids using syscalls for clock_gettime().
- *
- * For systems which do invoke a system call we wait at least
- * TIME_UPDATE_INTERVAL ms between clock_gettime() calls and cache the time for
- * the interim.
- *
- * For systems which do not invoke a system call, we just call clock_gettime()
- * whenever the time is requested.  As a result we don't start the background
- * SIGALRM timer unless explicitly needed by time_alarm() */
-#if defined __x86_64__ && defined __linux__
-#define CACHE_TIME 0
-#else
-#define CACHE_TIME 1
-#endif
-
 #define TIME_MAX TYPE_MAXIMUM(time_t)
 #define TIME_MIN TYPE_MINIMUM(time_t)
 
@@ -58,6 +43,22 @@ BUILD_ASSERT_DECL(TYPE_IS_SIGNED(time_t));
  * adjusted much below 10 ms or so with the current implementation, or too
  * much time will be wasted in signal handlers and calls to clock_gettime(). */
 #define TIME_UPDATE_INTERVAL 100
+
+/* True on systems (particularly x86-64 Linux) where clock_gettime() is
+ * inexpensive.  On these systems, we don't bother caching the current time.
+ * Instead, we consult clock_gettime() directly when needed.
+ *
+ * False on systems where clock_gettime() is relatively expensive.  On these
+ * systems, we cache the current time and set up a periodic SIGALRM to remind
+ * us to update it.
+ *
+ * Also false on systems (e.g. ESX) that don't support setting up timers based
+ * on a monotonically increasing clock. */
+#if defined ESX || (defined __x86_64__ && defined LINUX_DATAPATH)
+#define CACHE_TIME 0
+#else
+#define CACHE_TIME 1
+#endif
 
 void time_disable_restart(void);
 void time_enable_restart(void);
@@ -72,6 +73,7 @@ void time_wall_timespec(struct timespec *);
 void time_alarm(unsigned int secs);
 int time_poll(struct pollfd *, int n_pollfds, long long int timeout_when,
               int *elapsed);
+bool time_cached(void);
 
 long long int timespec_to_msec(const struct timespec *);
 long long int timeval_to_msec(const struct timeval *);

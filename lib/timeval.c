@@ -40,7 +40,7 @@ VLOG_DEFINE_THIS_MODULE(timeval);
  * to CLOCK_REALTIME. */
 static clockid_t monotonic_clock;
 
-/* Has a timer tick occurred? Only relevant if CACHE_TIME is 1.
+/* Has a timer tick occurred? Only relevant if CACHE_TIME is true.
  *
  * We initialize these to true to force time_init() to get called on the first
  * call to time_msec() or another function that queries the current time. */
@@ -58,15 +58,14 @@ static long long int boot_time;
 static struct timespec warp_offset; /* Offset added to monotonic_time. */
 static bool time_stopped;           /* Disables real-time updates, if true. */
 
-/* Time at which to die with SIGALRM (if not TIME_MIN). */
-static time_t deadline = TIME_MIN;
+/* Time in milliseconds at which to die with SIGALRM (if not LLONG_MAX). */
+static long long int deadline = LLONG_MAX;
 
 static void set_up_timer(void);
 static void set_up_signal(int flags);
 static void sigalrm_handler(int);
 static void refresh_wall_if_ticked(void);
 static void refresh_monotonic_if_ticked(void);
-static time_t time_add(time_t, time_t);
 static void block_sigalrm(sigset_t *);
 static void unblock_sigalrm(const sigset_t *);
 static void log_poll_interval(long long int last_wakeup);
@@ -94,10 +93,8 @@ time_init(void)
         VLOG_DBG("monotonic timer not available");
     }
 
-    if (CACHE_TIME) {
-        set_up_signal(SA_RESTART);
-        set_up_timer();
-    }
+    set_up_signal(SA_RESTART);
+    set_up_timer();
 
     boot_time = time_msec();
 }
@@ -149,6 +146,10 @@ set_up_timer(void)
     static timer_t timer_id;    /* "static" to avoid apparent memory leak. */
     struct itimerspec itimer;
 
+    if (!CACHE_TIME) {
+        return;
+    }
+
     if (timer_create(monotonic_clock, NULL, &timer_id)) {
         VLOG_FATAL("timer_create failed (%s)", strerror(errno));
     }
@@ -171,16 +172,7 @@ void
 time_postfork(void)
 {
     time_init();
-
-    if (CACHE_TIME) {
-        set_up_timer();
-    } else {
-        /* If we are not caching  kernel time, the only reason the timer should
-         * exist is if time_alarm() was called and deadline is set */
-        if (deadline != TIME_MIN) {
-            set_up_timer();
-        }
-    }
+    set_up_timer();
 }
 
 static void
@@ -212,7 +204,7 @@ refresh_monotonic(void)
 /* Forces a refresh of the current time from the kernel.  It is not usually
  * necessary to call this function, since the time will be refreshed
  * automatically at least every TIME_UPDATE_INTERVAL milliseconds.  If
- * CACHE_TIME is 0, we will always refresh the current time so this
+ * CACHE_TIME is false, we will always refresh the current time so this
  * function has no effect. */
 void
 time_refresh(void)
@@ -226,17 +218,6 @@ time_now(void)
 {
     refresh_monotonic_if_ticked();
     return monotonic_time.tv_sec;
-}
-
-/* Same as time_now() except does not write to static variables, for use in
- * signal handlers.  */
-static time_t
-time_now_sig(void)
-{
-    struct timespec cur_time;
-
-    clock_gettime(monotonic_clock, &cur_time);
-    return cur_time.tv_sec;
 }
 
 /* Returns the current time, in seconds. */
@@ -286,20 +267,20 @@ time_wall_timespec(struct timespec *ts)
 void
 time_alarm(unsigned int secs)
 {
+    long long int now;
+    long long int msecs;
+
     sigset_t oldsigs;
 
     time_init();
+    time_refresh();
+
+    now = time_msec();
+    msecs = secs * 1000;
 
     block_sigalrm(&oldsigs);
-    deadline = secs ? time_add(time_now(), secs) : TIME_MIN;
+    deadline = now < LLONG_MAX - msecs ? now + msecs : LLONG_MAX;
     unblock_sigalrm(&oldsigs);
-
-    if (!CACHE_TIME) {
-        /* If we aren't timing the gaps between kernel time refreshes we need to
-         * to start the timer up now */
-        set_up_signal(SA_RESTART);
-        set_up_timer();
-    }
 }
 
 /* Like poll(), except:
@@ -331,6 +312,9 @@ time_poll(struct pollfd *pollfds, int n_pollfds, long long int timeout_when,
     coverage_clear();
     start = time_msec();
     blocked = false;
+
+    timeout_when = MIN(timeout_when, deadline);
+
     for (;;) {
         long long int now = time_msec();
         int time_left;
@@ -347,12 +331,21 @@ time_poll(struct pollfd *pollfds, int n_pollfds, long long int timeout_when,
         if (retval < 0) {
             retval = -errno;
         }
+
         time_refresh();
+        if (deadline <= time_msec()) {
+            fatal_signal_handler(SIGALRM);
+            if (retval < 0) {
+                retval = 0;
+            }
+            break;
+        }
+
         if (retval != -EINTR) {
             break;
         }
 
-        if (!blocked && deadline == TIME_MIN) {
+        if (!blocked && !CACHE_TIME) {
             block_sigalrm(&oldsigs);
             blocked = true;
         }
@@ -366,23 +359,11 @@ time_poll(struct pollfd *pollfds, int n_pollfds, long long int timeout_when,
     return retval;
 }
 
-/* Returns the sum of 'a' and 'b', with saturation on overflow or underflow. */
-static time_t
-time_add(time_t a, time_t b)
-{
-    return (a >= 0
-            ? (b > TIME_MAX - a ? TIME_MAX : a + b)
-            : (b < TIME_MIN - a ? TIME_MIN : a + b));
-}
-
 static void
-sigalrm_handler(int sig_nr)
+sigalrm_handler(int sig_nr OVS_UNUSED)
 {
     wall_tick = true;
     monotonic_tick = true;
-    if (deadline != TIME_MIN && time_now_sig() > deadline) {
-        fatal_signal_handler(sig_nr);
-    }
 }
 
 static void
