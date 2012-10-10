@@ -1299,19 +1299,19 @@ odp_flow_key_from_flow(struct ofpbuf *buf, const struct flow *flow)
         nl_msg_put_u32(buf, OVS_KEY_ATTR_PRIORITY, flow->skb_priority);
     }
 
-    if (flow->tun_id != htonll(0)) {
+    if (flow->tunnel.tun_id != htonll(0)) {
         struct ovs_key_tunnel *tun_key;
 
         if (flow->nw_src != 0 && flow->nw_dst != 0) {
             tun_key = nl_msg_put_unspec_uninit(buf, OVS_KEY_ATTR_TUNNEL,
                                                 sizeof *tun_key);
-            tun_key->tun_id = flow->tun_id;
-            tun_key->ipv4_src = flow->nw_src;
-            tun_key->ipv4_dst = flow->nw_dst;
-            tun_key->ipv4_ttl = flow->nw_tos;
-            tun_key->ipv4_tos = flow->nw_ttl;
+            tun_key->tun_id = flow->tunnel.tun_id;
+            tun_key->ipv4_src = flow->tunnel.ip_src;
+            tun_key->ipv4_dst = flow->tunnel.ip_dst;
+            tun_key->ipv4_ttl = flow->tunnel.ip_tos;
+            tun_key->ipv4_tos = flow->tunnel.ip_ttl;
         } else {
-            nl_msg_put_be64(buf, OVS_KEY_ATTR_TUN_ID, flow->tun_id);
+            nl_msg_put_be64(buf, OVS_KEY_ATTR_TUN_ID, flow->tunnel.tun_id);
         }
     }
 
@@ -1918,7 +1918,7 @@ commit_set_tunnel_action(const struct flow *flow, struct flow *base,
         base->nw_dst == flow->nw_dst &&
         base->nw_tos == flow->nw_tos &&
         base->nw_ttl == flow->nw_ttl &&
-        base->tun_id == flow->tun_id) {
+        base->tunnel.tun_id == flow->tunnel.tun_id) {
         return;
     }
 
@@ -1926,7 +1926,7 @@ commit_set_tunnel_action(const struct flow *flow, struct flow *base,
     tun_key.ipv4_dst = base->nw_dst = flow->nw_dst;
     tun_key.ipv4_tos = base->nw_tos = flow->nw_tos;
     tun_key.ipv4_ttl = base->nw_ttl = flow->nw_ttl;
-    tun_key.tun_id = base->tun_id;
+    tun_key.tun_id = base->tunnel.tun_id;
 
     commit_set_action(odp_actions, OVS_KEY_ATTR_TUNNEL,
                       &tun_key, sizeof(tun_key));

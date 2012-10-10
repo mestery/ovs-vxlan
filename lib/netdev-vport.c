@@ -174,12 +174,7 @@ netdev_vport_get_netdev_type(const struct dpif_linux_vport *vport)
         return get_maybe_ipsec_tunnel_type(vport, "gre", "ipsec_gre");
 
     case OVS_VPORT_TYPE_GRE64:
-        if (tnl_port_config_from_nlattr(vport->options, vport->options_len,
-                                        a)) {
-            break;
-        }
-        return (nl_attr_get_u32(a[OVS_TUNNEL_ATTR_FLAGS]) & TNL_F_IPSEC
-                ? "ipsec_gre64" : "gre64");
+        return get_maybe_ipsec_tunnel_type(vport, "gre", "ipsec_gre");
 
     case OVS_VPORT_TYPE_CAPWAP:
         return "capwap";
@@ -597,6 +592,7 @@ parse_tunnel_config(const char *name, const char *type,
                     const struct smap *args, struct ofpbuf *options)
 {
     bool is_ipsec;
+    bool is_gre;
     bool supports_csum;
     struct smap_node *node;
     bool ipsec_mech_set = false;
