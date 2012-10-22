@@ -19,7 +19,7 @@ AC_DEFUN([OVS_CHECK_COVERAGE],
   [AC_REQUIRE([AC_PROG_CC])
    AC_ARG_ENABLE(
      [coverage],
-     [AC_HELP_STRING([--enable-coverage], 
+     [AC_HELP_STRING([--enable-coverage],
                      [Enable gcov coverage tool.])],
      [case "${enableval}" in
         (yes) coverage=true ;;
@@ -36,7 +36,7 @@ dnl Checks for --enable-ndebug and defines NDEBUG if it is specified.
 AC_DEFUN([OVS_CHECK_NDEBUG],
   [AC_ARG_ENABLE(
      [ndebug],
-     [AC_HELP_STRING([--enable-ndebug], 
+     [AC_HELP_STRING([--enable-ndebug],
                      [Disable debugging features for max performance])],
      [case "${enableval}" in
         (yes) ndebug=true ;;
@@ -45,6 +45,22 @@ AC_DEFUN([OVS_CHECK_NDEBUG],
       esac],
      [ndebug=false])
    AM_CONDITIONAL([NDEBUG], [test x$ndebug = xtrue])])
+
+dnl Checks for --enable-cache-time and defines CACHE_TIME if it is specified.
+AC_DEFUN([OVS_CHECK_CACHE_TIME],
+  [AC_ARG_ENABLE(
+     [cache-time],
+     [AC_HELP_STRING([--enable-cache-time],
+                     [Override time caching default (for testing only)])],
+     [case "${enableval}" in
+        (yes) cache_time=1;;
+        (no)  cache_time=0;;
+        (*) AC_MSG_ERROR([bad value ${enableval} for --enable-cache-time]) ;;
+      esac
+      AC_DEFINE_UNQUOTED([CACHE_TIME], [$cache_time],
+          [Define to 1 to enable time caching, to 0 to disable time caching, or
+           leave undefined to use the default (as one should
+           ordinarily do).])])])
 
 dnl Checks for ESX.
 AC_DEFUN([OVS_CHECK_ESX],
@@ -84,7 +100,7 @@ AC_DEFUN([OVS_CHECK_OPENSSL],
 
    if test "$ssl" != false; then
        m4_ifndef([PKG_CHECK_MODULES], [m4_fatal([Please install pkg-config.])])
-       PKG_CHECK_MODULES([SSL], [openssl], 
+       PKG_CHECK_MODULES([SSL], [openssl],
          [HAVE_OPENSSL=yes],
          [HAVE_OPENSSL=no
           if test "$ssl" = check; then
@@ -114,8 +130,8 @@ AC_DEFUN([OVS_CHECK_SOCKET_LIBS],
 dnl Checks for the directory in which to store the PKI.
 AC_DEFUN([OVS_CHECK_PKIDIR],
   [AC_ARG_WITH(
-     [pkidir], 
-     AC_HELP_STRING([--with-pkidir=DIR], 
+     [pkidir],
+     AC_HELP_STRING([--with-pkidir=DIR],
                     [PKI hierarchy directory [[LOCALSTATEDIR/lib/openvswitch/pki]]]),
      [PKIDIR=$withval],
      [PKIDIR='${localstatedir}/lib/openvswitch/pki'])
@@ -124,8 +140,8 @@ AC_DEFUN([OVS_CHECK_PKIDIR],
 dnl Checks for the directory in which to store pidfiles.
 AC_DEFUN([OVS_CHECK_RUNDIR],
   [AC_ARG_WITH(
-     [rundir], 
-     AC_HELP_STRING([--with-rundir=DIR], 
+     [rundir],
+     AC_HELP_STRING([--with-rundir=DIR],
                     [directory used for pidfiles
                     [[LOCALSTATEDIR/run/openvswitch]]]),
      [RUNDIR=$withval],
@@ -135,8 +151,8 @@ AC_DEFUN([OVS_CHECK_RUNDIR],
 dnl Checks for the directory in which to store logs.
 AC_DEFUN([OVS_CHECK_LOGDIR],
   [AC_ARG_WITH(
-     [logdir], 
-     AC_HELP_STRING([--with-logdir=DIR], 
+     [logdir],
+     AC_HELP_STRING([--with-logdir=DIR],
                     [directory used for logs [[LOCALSTATEDIR/log/PACKAGE]]]),
      [LOGDIR=$withval],
      [LOGDIR='${localstatedir}/log/${PACKAGE}'])
@@ -165,20 +181,20 @@ AC_DEFUN([OVS_CHECK_MALLOC_HOOKS],
     [AC_COMPILE_IFELSE(
       [AC_LANG_PROGRAM(
          [#include <malloc.h>
-         ], 
+         ],
          [(void) __malloc_hook;
           (void) __realloc_hook;
           (void) __free_hook;])],
       [ovs_cv_malloc_hooks=yes],
       [ovs_cv_malloc_hooks=no])])
    if test $ovs_cv_malloc_hooks = yes; then
-     AC_DEFINE([HAVE_MALLOC_HOOKS], [1], 
+     AC_DEFINE([HAVE_MALLOC_HOOKS], [1],
                [Define to 1 if you have __malloc_hook, __realloc_hook, and
                 __free_hook in <malloc.h>.])
    fi])
 
 dnl Checks for valgrind/valgrind.h.
-AC_DEFUN([OVS_CHECK_VALGRIND], 
+AC_DEFUN([OVS_CHECK_VALGRIND],
   [AC_CHECK_HEADERS([valgrind/valgrind.h])])
 
 dnl Checks for Python 2.x, x >= 4.

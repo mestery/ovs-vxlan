@@ -587,19 +587,17 @@ static int validate_set(const struct nlattr *a,
 
 	switch (key_type) {
 	const struct ovs_key_ipv4 *ipv4_key;
+	const struct ovs_key_ipv4_tunnel *tun_key;
 
 	case OVS_KEY_ATTR_PRIORITY:
 	case OVS_KEY_ATTR_TUN_ID:
 	case OVS_KEY_ATTR_ETHERNET:
 		break;
 
-	case OVS_KEY_ATTR_TUNNEL:
-		if (flow_key->eth.type != htons(ETH_P_IP))
+	case OVS_KEY_ATTR_IPV4_TUNNEL:
+		tun_key = nla_data(ovs_key);
+		if (!tun_key->ipv4_dst)
 			return -EINVAL;
-
-		if (!flow_key->tunnel.ipv4_src || !flow_key->tunnel.ipv4_dst)
-			return -EINVAL;
-
 		break;
 
 	case OVS_KEY_ATTR_IPV4:
@@ -792,18 +790,13 @@ static int ovs_packet_cmd_execute(struct sk_buff *skb, struct genl_info *info)
 	if (err)
 		goto err_flow_put;
 
-	err = ovs_flow_metadata_from_nlattrs(&flow->key.phy.priority,
-					     &flow->key.phy.in_port,
-					     &flow->key.phy.tun_id,
-					     a[OVS_PACKET_ATTR_KEY]);
+	err = ovs_flow_metadata_from_nlattrs(flow, key_len, a[OVS_PACKET_ATTR_KEY]);
 	if (err)
 		goto err_flow_put;
 
 	err = validate_actions(a[OVS_PACKET_ATTR_ACTIONS], &flow->key, 0);
 	if (err)
 		goto err_flow_put;
-
-	flow->hash = ovs_flow_hash(&flow->key, key_len);
 
 	acts = ovs_flow_actions_alloc(a[OVS_PACKET_ATTR_ACTIONS]);
 	err = PTR_ERR(acts);
@@ -1075,7 +1068,6 @@ static int ovs_flow_cmd_new_or_set(struct sk_buff *skb, struct genl_info *info)
 			error = PTR_ERR(flow);
 			goto error;
 		}
-		flow->key = key;
 		clear_stats(flow);
 
 		/* Obtain actions. */
@@ -1086,8 +1078,7 @@ static int ovs_flow_cmd_new_or_set(struct sk_buff *skb, struct genl_info *info)
 		rcu_assign_pointer(flow->sf_acts, acts);
 
 		/* Put flow in bucket. */
-		flow->hash = ovs_flow_hash(&key, key_len);
-		ovs_flow_tbl_insert(table, flow);
+		ovs_flow_tbl_insert(table, flow, &key, key_len);
 
 		reply = ovs_flow_cmd_build_info(flow, dp, info->snd_pid,
 						info->snd_seq,

@@ -42,6 +42,7 @@ static __be16 get_src_port(const struct sk_buff *skb,
 
 static void vxlan_build_header(const struct vport *vport,
 			       const struct tnl_mutable_config *mutable,
+			       const struct ovs_key_ipv4_tunnel *tun_key,
 			       void *header)
 {
 	struct udphdr *udph = header;
@@ -51,19 +52,19 @@ static void vxlan_build_header(const struct vport *vport,
 	udph->check = 0;
 
 	vxh->vx_flags = htonl(VXLAN_FLAGS);
-	vxh->vx_vni = htonl(be64_to_cpu(mutable->out_key) << 8);
+	vxh->vx_vni = htonl(be64_to_cpu(tun_key->tun_id) << 8);
 }
 
 static struct sk_buff *vxlan_update_header(const struct vport *vport,
 					   const struct tnl_mutable_config *mutable,
 					   struct dst_entry *dst,
-					   struct sk_buff *skb)
+					   struct sk_buff *skb, int tunnel_hlen)
 {
 	struct udphdr *udph = udp_hdr(skb);
 	struct vxlanhdr *vxh = (struct vxlanhdr *)(udph + 1);
 
 	if (mutable->flags & TNL_F_OUT_KEY_ACTION)
-		vxh->vx_vni = htonl(be64_to_cpu(OVS_CB(skb)->tun_id) << 8);
+		vxh->vx_vni = htonl(be64_to_cpu(OVS_CB(skb)->tun_key->tun_id) << 8);
 
 	udph->source = get_src_port(skb, mutable);
 	udph->len = htons(skb->len - skb_transport_offset(skb));
@@ -132,17 +133,17 @@ static int vxlan_rcv(struct sock *sk, struct sk_buff *skb)
 	skb_postpull_rcsum(skb, skb_transport_header(skb), VXLAN_HLEN + ETH_HLEN);
 
 	/* Save outer tunnel values */
-	OVS_CB(skb)->tun_ipv4_src = iph->saddr;
-	OVS_CB(skb)->tun_ipv4_dst = iph->daddr;
-	OVS_CB(skb)->tun_ipv4_tos = iph->tos;
-	OVS_CB(skb)->tun_ipv4_ttl = iph->ttl;
+	OVS_CB(skb)->tun_key->ipv4_src = iph->saddr;
+	OVS_CB(skb)->tun_key->ipv4_dst = iph->daddr;
+	OVS_CB(skb)->tun_key->ipv4_tos = iph->tos;
+	OVS_CB(skb)->tun_key->ipv4_ttl = iph->ttl;
 
 	if (mutable->flags & TNL_F_IN_KEY_MATCH)
-		OVS_CB(skb)->tun_id = key;
+		OVS_CB(skb)->tun_key->tun_id = key;
 	else
-		OVS_CB(skb)->tun_id = 0;
+		OVS_CB(skb)->tun_key->tun_id = 0;
 
-	ovs_tnl_rcv(vport, skb, iph->tos);
+	ovs_tnl_rcv(vport, skb);
 	goto out;
 
 error:

@@ -379,7 +379,7 @@ ofproto_create(const char *datapath_name, const char *datapath_type,
                 hash_string(ofproto->name, 0));
     ofproto->datapath_id = 0;
     ofproto_set_flow_eviction_threshold(ofproto,
-                                        OFPROTO_FLOW_EVICTON_THRESHOLD_DEFAULT);
+                                        OFPROTO_FLOW_EVICTION_THRESHOLD_DEFAULT);
     ofproto->forward_bpdu = false;
     ofproto->fallback_dpid = pick_fallback_dpid();
     ofproto->mfr_desc = xstrdup(DEFAULT_MFR_DESC);
@@ -2295,29 +2295,14 @@ handle_table_stats_request(struct ofconn *ofconn,
 static void
 append_port_stat(struct ofport *port, struct list *replies)
 {
-    struct netdev_stats stats;
-    struct ofp10_port_stats *ops;
+    struct ofputil_port_stats ops = { .port_no = port->pp.port_no };
 
     /* Intentionally ignore return value, since errors will set
      * 'stats' to all-1s, which is correct for OpenFlow, and
      * netdev_get_stats() will log errors. */
-    ofproto_port_get_stats(port, &stats);
+    ofproto_port_get_stats(port, &ops.stats);
 
-    ops = ofpmp_append(replies, sizeof *ops);
-    ops->port_no = htons(port->pp.port_no);
-    memset(ops->pad, 0, sizeof ops->pad);
-    put_32aligned_be64(&ops->rx_packets, htonll(stats.rx_packets));
-    put_32aligned_be64(&ops->tx_packets, htonll(stats.tx_packets));
-    put_32aligned_be64(&ops->rx_bytes, htonll(stats.rx_bytes));
-    put_32aligned_be64(&ops->tx_bytes, htonll(stats.tx_bytes));
-    put_32aligned_be64(&ops->rx_dropped, htonll(stats.rx_dropped));
-    put_32aligned_be64(&ops->tx_dropped, htonll(stats.tx_dropped));
-    put_32aligned_be64(&ops->rx_errors, htonll(stats.rx_errors));
-    put_32aligned_be64(&ops->tx_errors, htonll(stats.tx_errors));
-    put_32aligned_be64(&ops->rx_frame_err, htonll(stats.rx_frame_errors));
-    put_32aligned_be64(&ops->rx_over_err, htonll(stats.rx_over_errors));
-    put_32aligned_be64(&ops->rx_crc_err, htonll(stats.rx_crc_errors));
-    put_32aligned_be64(&ops->collisions, htonll(stats.collisions));
+    ofputil_append_port_stat(replies, &ops);
 }
 
 static enum ofperr
@@ -2325,13 +2310,19 @@ handle_port_stats_request(struct ofconn *ofconn,
                           const struct ofp_header *request)
 {
     struct ofproto *p = ofconn_get_ofproto(ofconn);
-    const struct ofp10_port_stats_request *psr = ofpmsg_body(request);
     struct ofport *port;
     struct list replies;
+    uint16_t port_no;
+    enum ofperr error;
+
+    error = ofputil_decode_port_stats_request(request, &port_no);
+    if (error) {
+        return error;
+    }
 
     ofpmp_init(&replies, request);
-    if (psr->port_no != htons(OFPP_NONE)) {
-        port = ofproto_get_port(p, ntohs(psr->port_no));
+    if (port_no != OFPP_NONE) {
+        port = ofproto_get_port(p, port_no);
         if (port) {
             append_port_stat(port, &replies);
         }
@@ -2784,15 +2775,13 @@ static void
 put_queue_stats(struct queue_stats_cbdata *cbdata, uint32_t queue_id,
                 const struct netdev_queue_stats *stats)
 {
-    struct ofp10_queue_stats *reply;
 
-    reply = ofpmp_append(&cbdata->replies, sizeof *reply);
-    reply->port_no = htons(cbdata->ofport->pp.port_no);
-    memset(reply->pad, 0, sizeof reply->pad);
-    reply->queue_id = htonl(queue_id);
-    put_32aligned_be64(&reply->tx_bytes, htonll(stats->tx_bytes));
-    put_32aligned_be64(&reply->tx_packets, htonll(stats->tx_packets));
-    put_32aligned_be64(&reply->tx_errors, htonll(stats->tx_errors));
+    struct ofputil_queue_stats oqs = {
+        .port_no = cbdata->ofport->pp.port_no,
+        .queue_id = queue_id,
+        .stats = *stats,
+    };
+    ofputil_append_queue_stat(&cbdata->replies, &oqs);
 }
 
 static void
@@ -2830,30 +2819,31 @@ handle_queue_stats_request(struct ofconn *ofconn,
                            const struct ofp_header *rq)
 {
     struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
-    const struct ofp10_queue_stats_request *qsr = ofpmsg_body(rq);
     struct queue_stats_cbdata cbdata;
-    unsigned int port_no;
     struct ofport *port;
-    uint32_t queue_id;
     enum ofperr error;
+    struct ofputil_queue_stats_request oqsr;
 
     COVERAGE_INC(ofproto_queue_req);
 
     ofpmp_init(&cbdata.replies, rq);
 
-    port_no = ntohs(qsr->port_no);
-    queue_id = ntohl(qsr->queue_id);
-    if (port_no == OFPP_ALL) {
+    error = ofputil_decode_queue_stats_request(rq, &oqsr);
+    if (error) {
+        return error;
+    }
+
+    if (oqsr.port_no == OFPP_ALL) {
         error = OFPERR_OFPQOFC_BAD_QUEUE;
         HMAP_FOR_EACH (port, hmap_node, &ofproto->ports) {
-            if (!handle_queue_stats_for_port(port, queue_id, &cbdata)) {
+            if (!handle_queue_stats_for_port(port, oqsr.queue_id, &cbdata)) {
                 error = 0;
             }
         }
     } else {
-        port = ofproto_get_port(ofproto, port_no);
+        port = ofproto_get_port(ofproto, oqsr.port_no);
         error = (port
-                 ? handle_queue_stats_for_port(port, queue_id, &cbdata)
+                 ? handle_queue_stats_for_port(port, oqsr.queue_id, &cbdata)
                  : OFPERR_OFPQOFC_BAD_PORT);
     }
     if (!error) {
@@ -2998,7 +2988,7 @@ add_flow(struct ofproto *ofproto, struct ofconn *ofconn,
             rule->evictable = was_evictable;
 
             if (!evict) {
-                error = OFPERR_OFPFMFC_ALL_TABLES_FULL;
+                error = OFPERR_OFPFMFC_TABLE_FULL;
                 goto exit;
             } else if (evict->pending) {
                 error = OFPROTO_POSTPONE;
@@ -3090,6 +3080,17 @@ modify_flows__(struct ofproto *ofproto, struct ofconn *ofconn,
     return error;
 }
 
+static enum ofperr
+modify_flows_add(struct ofproto *ofproto, struct ofconn *ofconn,
+                 const struct ofputil_flow_mod *fm,
+                 const struct ofp_header *request)
+{
+    if (fm->cookie_mask != htonll(0) || fm->new_cookie == htonll(UINT64_MAX)) {
+        return 0;
+    }
+    return add_flow(ofproto, ofconn, fm, request);
+}
+
 /* Implements OFPFC_MODIFY.  Returns 0 on success or an OpenFlow error code on
  * failure.
  *
@@ -3109,7 +3110,7 @@ modify_flows_loose(struct ofproto *ofproto, struct ofconn *ofconn,
     if (error) {
         return error;
     } else if (list_is_empty(&rules)) {
-        return fm->cookie_mask ? 0 : add_flow(ofproto, ofconn, fm, request);
+        return modify_flows_add(ofproto, ofconn, fm, request);
     } else {
         return modify_flows__(ofproto, ofconn, fm, request, &rules);
     }
@@ -3135,7 +3136,7 @@ modify_flow_strict(struct ofproto *ofproto, struct ofconn *ofconn,
     if (error) {
         return error;
     } else if (list_is_empty(&rules)) {
-        return fm->cookie_mask ? 0 : add_flow(ofproto, ofconn, fm, request);
+        return modify_flows_add(ofproto, ofconn, fm, request);
     } else {
         return list_is_singleton(&rules) ? modify_flows__(ofproto, ofconn,
                                                           fm, request, &rules)
@@ -3303,7 +3304,7 @@ handle_flow_mod(struct ofconn *ofconn, const struct ofp_header *oh)
          * is not required in OpenFlow 1.0.1 and removed from OpenFlow 1.1.
          * There is no good error code, so just state that the flow table
          * is full. */
-        error = OFPERR_OFPFMFC_ALL_TABLES_FULL;
+        error = OFPERR_OFPFMFC_TABLE_FULL;
     }
     if (!error) {
         error = ofpacts_check(fm.ofpacts, fm.ofpacts_len,

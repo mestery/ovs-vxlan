@@ -1157,7 +1157,6 @@ ofputil_decode_flow_mod(struct ofputil_flow_mod *fm,
             fm->cookie_mask = htonll(0);
             fm->new_cookie = ofm->cookie;
         } else {
-            /* XXX */
             fm->cookie = ofm->cookie;
             fm->cookie_mask = ofm->cookie_mask;
             fm->new_cookie = htonll(UINT64_MAX);
@@ -1284,7 +1283,11 @@ ofputil_encode_flow_mod(const struct ofputil_flow_mod *fm,
         msg = ofpraw_alloc(OFPRAW_OFPT11_FLOW_MOD, OFP12_VERSION,
                            NXM_TYPICAL_LEN + fm->ofpacts_len);
         ofm = ofpbuf_put_zeros(msg, sizeof *ofm);
-        ofm->cookie = fm->new_cookie;
+        if (fm->command == OFPFC_ADD) {
+            ofm->cookie = fm->new_cookie;
+        } else {
+            ofm->cookie = fm->cookie;
+        }
         ofm->cookie_mask = fm->cookie_mask;
         ofm->table_id = fm->table_id;
         ofm->command = fm->command;
@@ -1939,7 +1942,7 @@ ofputil_decode_flow_removed(struct ofputil_flow_removed *fr,
         fr->byte_count = ntohll(ofr->byte_count);
     } else if (raw == OFPRAW_NXT_FLOW_REMOVED) {
         struct nx_flow_removed *nfr;
-        int error;
+        enum ofperr error;
 
         nfr = ofpbuf_pull(&b, sizeof *nfr);
         error = nx_pull_match(&b, ntohs(nfr->match_len), &fr->match,
@@ -3539,34 +3542,35 @@ ofputil_check_output_port(uint16_t port, int max_ports)
         OFPUTIL_NAMED_PORT(LOCAL)               \
         OFPUTIL_NAMED_PORT(NONE)
 
-/* Returns the port number represented by 's', which may be an integer or, for
- * reserved ports, the standard OpenFlow name for the port (e.g. "LOCAL").
+/* Stores the port number represented by 's' into '*portp'.  's' may be an
+ * integer or, for reserved ports, the standard OpenFlow name for the port
+ * (e.g. "LOCAL").
  *
- * Returns 0 if 's' is not a valid OpenFlow port number or name.  The caller
- * should issue an error message in this case, because this function usually
- * does not.  (This gives the caller an opportunity to look up the port name
- * another way, e.g. by contacting the switch and listing the names of all its
- * ports).
+ * Returns true if successful, false if 's' is not a valid OpenFlow port number
+ * or name.  The caller should issue an error message in this case, because
+ * this function usually does not.  (This gives the caller an opportunity to
+ * look up the port name another way, e.g. by contacting the switch and listing
+ * the names of all its ports).
  *
  * This function accepts OpenFlow 1.0 port numbers.  It also accepts a subset
  * of OpenFlow 1.1+ port numbers, mapping those port numbers into the 16-bit
  * range as described in include/openflow/openflow-1.1.h. */
-uint16_t
-ofputil_port_from_string(const char *s)
+bool
+ofputil_port_from_string(const char *s, uint16_t *portp)
 {
     unsigned int port32;
 
+    *portp = 0;
     if (str_to_uint(s, 10, &port32)) {
-        if (port32 == 0) {
-            VLOG_WARN("port 0 is not a valid OpenFlow port number");
-            return 0;
-        } else if (port32 < OFPP_MAX) {
-            return port32;
+        if (port32 < OFPP_MAX) {
+            *portp = port32;
+            return true;
         } else if (port32 < OFPP_FIRST_RESV) {
             VLOG_WARN("port %u is a reserved OF1.0 port number that will "
                       "be translated to %u when talking to an OF1.1 or "
                       "later controller", port32, port32 + OFPP11_OFFSET);
-            return port32;
+            *portp = port32;
+            return true;
         } else if (port32 <= OFPP_LAST_RESV) {
             struct ds s;
 
@@ -3577,14 +3581,16 @@ ofputil_port_from_string(const char *s)
                            ds_cstr(&s), port32);
             ds_destroy(&s);
 
-            return port32;
+            *portp = port32;
+            return true;
         } else if (port32 < OFPP11_MAX) {
             VLOG_WARN("port %u is outside the supported range 0 through "
                       "%"PRIx16"or 0x%x through 0x%"PRIx32, port32,
                       UINT16_MAX, (unsigned int) OFPP11_MAX, UINT32_MAX);
-            return 0;
+            return false;
         } else {
-            return port32 - OFPP11_OFFSET;
+            *portp = port32 - OFPP11_OFFSET;
+            return true;
         }
     } else {
         struct pair {
@@ -3600,10 +3606,11 @@ ofputil_port_from_string(const char *s)
 
         for (p = pairs; p < &pairs[ARRAY_SIZE(pairs)]; p++) {
             if (!strcasecmp(s, p->name)) {
-                return p->value;
+                *portp = p->value;
+                return true;
             }
         }
-        return 0;
+        return false;
     }
 }
 
@@ -3937,4 +3944,452 @@ ofputil_parse_key_value(char **stringp, char **keyp, char **valuep)
     *keyp = key;
     *valuep = value;
     return true;
+}
+
+/* Encode a dump ports request for 'port', the encoded message
+ * will be fore Open Flow version 'ofp_version'. Returns message
+ * as a struct ofpbuf. Returns encoded message on success, NULL on error */
+struct ofpbuf *
+ofputil_encode_dump_ports_request(enum ofp_version ofp_version, int16_t port)
+{
+    struct ofpbuf *request;
+
+    switch (ofp_version) {
+    case OFP10_VERSION: {
+        struct ofp10_port_stats_request *req;
+        request = ofpraw_alloc(OFPRAW_OFPST10_PORT_REQUEST, ofp_version, 0);
+        req = ofpbuf_put_zeros(request, sizeof *req);
+        req->port_no = htons(port);
+        break;
+    }
+    case OFP11_VERSION:
+    case OFP12_VERSION: {
+        struct ofp11_port_stats_request *req;
+        request = ofpraw_alloc(OFPRAW_OFPST11_PORT_REQUEST, ofp_version, 0);
+        req = ofpbuf_put_zeros(request, sizeof *req);
+        req->port_no = ofputil_port_to_ofp11(port);
+        break;
+    }
+    default:
+        NOT_REACHED();
+    }
+
+    return request;
+}
+
+static void
+ofputil_port_stats_to_ofp10(const struct ofputil_port_stats *ops,
+                            struct ofp10_port_stats *ps10)
+{
+    ps10->port_no = htons(ops->port_no);
+    memset(ps10->pad, 0, sizeof ps10->pad);
+    put_32aligned_be64(&ps10->rx_packets, htonll(ops->stats.rx_packets));
+    put_32aligned_be64(&ps10->tx_packets, htonll(ops->stats.tx_packets));
+    put_32aligned_be64(&ps10->rx_bytes, htonll(ops->stats.rx_bytes));
+    put_32aligned_be64(&ps10->tx_bytes, htonll(ops->stats.tx_bytes));
+    put_32aligned_be64(&ps10->rx_dropped, htonll(ops->stats.rx_dropped));
+    put_32aligned_be64(&ps10->tx_dropped, htonll(ops->stats.tx_dropped));
+    put_32aligned_be64(&ps10->rx_errors, htonll(ops->stats.rx_errors));
+    put_32aligned_be64(&ps10->tx_errors, htonll(ops->stats.tx_errors));
+    put_32aligned_be64(&ps10->rx_frame_err, htonll(ops->stats.rx_frame_errors));
+    put_32aligned_be64(&ps10->rx_over_err, htonll(ops->stats.rx_over_errors));
+    put_32aligned_be64(&ps10->rx_crc_err, htonll(ops->stats.rx_crc_errors));
+    put_32aligned_be64(&ps10->collisions, htonll(ops->stats.collisions));
+}
+
+static void
+ofputil_port_stats_to_ofp11(const struct ofputil_port_stats *ops,
+                            struct ofp11_port_stats *ps11)
+{
+    ps11->port_no = ofputil_port_to_ofp11(ops->port_no);
+    memset(ps11->pad, 0, sizeof ps11->pad);
+    ps11->rx_packets = htonll(ops->stats.rx_packets);
+    ps11->tx_packets = htonll(ops->stats.tx_packets);
+    ps11->rx_bytes = htonll(ops->stats.rx_bytes);
+    ps11->tx_bytes = htonll(ops->stats.tx_bytes);
+    ps11->rx_dropped = htonll(ops->stats.rx_dropped);
+    ps11->tx_dropped = htonll(ops->stats.tx_dropped);
+    ps11->rx_errors = htonll(ops->stats.rx_errors);
+    ps11->tx_errors = htonll(ops->stats.tx_errors);
+    ps11->rx_frame_err = htonll(ops->stats.rx_frame_errors);
+    ps11->rx_over_err = htonll(ops->stats.rx_over_errors);
+    ps11->rx_crc_err = htonll(ops->stats.rx_crc_errors);
+    ps11->collisions = htonll(ops->stats.collisions);
+}
+
+/* Encode a ports stat for 'ops' and append it to 'replies'. */
+void
+ofputil_append_port_stat(struct list *replies,
+                         const struct ofputil_port_stats *ops)
+{
+    struct ofpbuf *msg = ofpbuf_from_list(list_back(replies));
+    struct ofp_header *oh = msg->data;
+
+    switch ((enum ofp_version)oh->version) {
+    case OFP12_VERSION:
+    case OFP11_VERSION: {
+        struct ofp11_port_stats *reply = ofpmp_append(replies, sizeof *reply);
+        ofputil_port_stats_to_ofp11(ops, reply);
+        break;
+    }
+
+    case OFP10_VERSION: {
+        struct ofp10_port_stats *reply = ofpmp_append(replies, sizeof *reply);
+        ofputil_port_stats_to_ofp10(ops, reply);
+        break;
+    }
+
+    default:
+        NOT_REACHED();
+    }
+}
+
+static enum ofperr
+ofputil_port_stats_from_ofp10(struct ofputil_port_stats *ops,
+                              const struct ofp10_port_stats *ps10)
+{
+    memset(ops, 0, sizeof *ops);
+
+    ops->port_no = ntohs(ps10->port_no);
+    ops->stats.rx_packets = ntohll(get_32aligned_be64(&ps10->rx_packets));
+    ops->stats.tx_packets = ntohll(get_32aligned_be64(&ps10->tx_packets));
+    ops->stats.rx_bytes = ntohll(get_32aligned_be64(&ps10->rx_bytes));
+    ops->stats.tx_bytes = ntohll(get_32aligned_be64(&ps10->tx_bytes));
+    ops->stats.rx_dropped = ntohll(get_32aligned_be64(&ps10->rx_dropped));
+    ops->stats.tx_dropped = ntohll(get_32aligned_be64(&ps10->tx_dropped));
+    ops->stats.rx_errors = ntohll(get_32aligned_be64(&ps10->rx_errors));
+    ops->stats.tx_errors = ntohll(get_32aligned_be64(&ps10->tx_errors));
+    ops->stats.rx_frame_errors =
+        ntohll(get_32aligned_be64(&ps10->rx_frame_err));
+    ops->stats.rx_over_errors = ntohll(get_32aligned_be64(&ps10->rx_over_err));
+    ops->stats.rx_crc_errors = ntohll(get_32aligned_be64(&ps10->rx_crc_err));
+    ops->stats.collisions = ntohll(get_32aligned_be64(&ps10->collisions));
+
+    return 0;
+}
+
+static enum ofperr
+ofputil_port_stats_from_ofp11(struct ofputil_port_stats *ops,
+                              const struct ofp11_port_stats *ps11)
+{
+    enum ofperr error;
+
+    memset(ops, 0, sizeof *ops);
+    error = ofputil_port_from_ofp11(ps11->port_no, &ops->port_no);
+    if (error) {
+        return error;
+    }
+
+    ops->stats.rx_packets = ntohll(ps11->rx_packets);
+    ops->stats.tx_packets = ntohll(ps11->tx_packets);
+    ops->stats.rx_bytes = ntohll(ps11->rx_bytes);
+    ops->stats.tx_bytes = ntohll(ps11->tx_bytes);
+    ops->stats.rx_dropped = ntohll(ps11->rx_dropped);
+    ops->stats.tx_dropped = ntohll(ps11->tx_dropped);
+    ops->stats.rx_errors = ntohll(ps11->rx_errors);
+    ops->stats.tx_errors = ntohll(ps11->tx_errors);
+    ops->stats.rx_frame_errors = ntohll(ps11->rx_frame_err);
+    ops->stats.rx_over_errors = ntohll(ps11->rx_over_err);
+    ops->stats.rx_crc_errors = ntohll(ps11->rx_crc_err);
+    ops->stats.collisions = ntohll(ps11->collisions);
+
+    return 0;
+}
+
+/* Returns the number of port stats elements in OFPTYPE_PORT_STATS_REPLY
+ * message 'oh'. */
+size_t
+ofputil_count_port_stats(const struct ofp_header *oh)
+{
+    struct ofpbuf b;
+
+    ofpbuf_use_const(&b, oh, ntohs(oh->length));
+    ofpraw_pull_assert(&b);
+
+    BUILD_ASSERT(sizeof(struct ofp10_port_stats) ==
+                 sizeof(struct ofp11_port_stats));
+    return b.size / sizeof(struct ofp10_port_stats);
+}
+
+/* Converts an OFPST_PORT_STATS reply in 'msg' into an abstract
+ * ofputil_port_stats in 'ps'.
+ *
+ * Multiple OFPST_PORT_STATS replies can be packed into a single OpenFlow
+ * message.  Calling this function multiple times for a single 'msg' iterates
+ * through the replies.  The caller must initially leave 'msg''s layer pointers
+ * null and not modify them between calls.
+ *
+ * Returns 0 if successful, EOF if no replies were left in this 'msg',
+ * otherwise a positive errno value. */
+int
+ofputil_decode_port_stats(struct ofputil_port_stats *ps, struct ofpbuf *msg)
+{
+    enum ofperr error;
+    enum ofpraw raw;
+
+    error = (msg->l2
+             ? ofpraw_decode(&raw, msg->l2)
+             : ofpraw_pull(&raw, msg));
+    if (error) {
+        return error;
+    }
+
+    if (!msg->size) {
+        return EOF;
+    } else if (raw == OFPRAW_OFPST11_PORT_REPLY) {
+        const struct ofp11_port_stats *ps11;
+
+        ps11 = ofpbuf_try_pull(msg, sizeof *ps11);
+        if (!ps11) {
+            VLOG_WARN_RL(&bad_ofmsg_rl, "OFPST_PORT reply has %zu leftover "
+                         "bytes at end", msg->size);
+            return OFPERR_OFPBRC_BAD_LEN;
+        }
+        return ofputil_port_stats_from_ofp11(ps, ps11);
+    } else if (raw == OFPRAW_OFPST10_PORT_REPLY) {
+        const struct ofp10_port_stats *ps10;
+
+        ps10 = ofpbuf_try_pull(msg, sizeof *ps10);
+        if (!ps10) {
+            VLOG_WARN_RL(&bad_ofmsg_rl, "OFPST_PORT reply has %zu leftover "
+                         "bytes at end", msg->size);
+            return OFPERR_OFPBRC_BAD_LEN;
+        }
+        return ofputil_port_stats_from_ofp10(ps, ps10);
+    } else {
+        NOT_REACHED();
+    }
+
+}
+
+/* Parse a port status request message into a 16 bit OpenFlow 1.0
+ * port number and stores the latter in '*ofp10_port'.
+ * Returns 0 if successful, otherwise an OFPERR_* number. */
+enum ofperr
+ofputil_decode_port_stats_request(const struct ofp_header *request,
+                                  uint16_t *ofp10_port)
+{
+    switch ((enum ofp_version)request->version) {
+    case OFP12_VERSION:
+    case OFP11_VERSION: {
+        const struct ofp11_port_stats_request *psr11 = ofpmsg_body(request);
+        return ofputil_port_from_ofp11(psr11->port_no, ofp10_port);
+    }
+
+    case OFP10_VERSION: {
+        const struct ofp10_port_stats_request *psr10 = ofpmsg_body(request);
+        *ofp10_port = ntohs(psr10->port_no);
+        return 0;
+    }
+
+    default:
+        NOT_REACHED();
+    }
+}
+
+/* Parse a queue status request message into 'oqsr'.
+ * Returns 0 if successful, otherwise an OFPERR_* number. */
+enum ofperr
+ofputil_decode_queue_stats_request(const struct ofp_header *request,
+                                   struct ofputil_queue_stats_request *oqsr)
+{
+    switch ((enum ofp_version)request->version) {
+    case OFP12_VERSION:
+    case OFP11_VERSION: {
+        const struct ofp11_queue_stats_request *qsr11 = ofpmsg_body(request);
+        oqsr->queue_id = ntohl(qsr11->queue_id);
+        return ofputil_port_from_ofp11(qsr11->port_no, &oqsr->port_no);
+    }
+
+    case OFP10_VERSION: {
+        const struct ofp10_queue_stats_request *qsr11 = ofpmsg_body(request);
+        oqsr->queue_id = ntohl(qsr11->queue_id);
+        oqsr->port_no = ntohs(qsr11->port_no);
+        return 0;
+    }
+
+    default:
+        NOT_REACHED();
+    }
+}
+
+/* Encode a queue statsrequest for 'oqsr', the encoded message
+ * will be fore Open Flow version 'ofp_version'. Returns message
+ * as a struct ofpbuf. Returns encoded message on success, NULL on error */
+struct ofpbuf *
+ofputil_encode_queue_stats_request(enum ofp_version ofp_version,
+                                   const struct ofputil_queue_stats_request *oqsr)
+{
+    struct ofpbuf *request;
+
+    switch (ofp_version) {
+    case OFP11_VERSION:
+    case OFP12_VERSION: {
+        struct ofp11_queue_stats_request *req;
+        request = ofpraw_alloc(OFPRAW_OFPST11_QUEUE_REQUEST, ofp_version, 0);
+        req = ofpbuf_put_zeros(request, sizeof *req);
+        req->port_no = ofputil_port_to_ofp11(oqsr->port_no);
+        req->queue_id = htonl(oqsr->queue_id);
+        break;
+    }
+    case OFP10_VERSION: {
+        struct ofp10_queue_stats_request *req;
+        request = ofpraw_alloc(OFPRAW_OFPST10_QUEUE_REQUEST, ofp_version, 0);
+        req = ofpbuf_put_zeros(request, sizeof *req);
+        req->port_no = htons(oqsr->port_no);
+        req->queue_id = htonl(oqsr->queue_id);
+        break;
+    }
+    default:
+        NOT_REACHED();
+    }
+
+    return request;
+}
+
+/* Returns the number of queue stats elements in OFPTYPE_QUEUE_STATS_REPLY
+ * message 'oh'. */
+size_t
+ofputil_count_queue_stats(const struct ofp_header *oh)
+{
+    struct ofpbuf b;
+
+    ofpbuf_use_const(&b, oh, ntohs(oh->length));
+    ofpraw_pull_assert(&b);
+
+    BUILD_ASSERT(sizeof(struct ofp10_queue_stats) ==
+                 sizeof(struct ofp11_queue_stats));
+    return b.size / sizeof(struct ofp10_queue_stats);
+}
+
+static enum ofperr
+ofputil_queue_stats_from_ofp10(struct ofputil_queue_stats *oqs,
+                               const struct ofp10_queue_stats *qs10)
+{
+    oqs->port_no = ntohs(qs10->port_no);
+    oqs->queue_id = ntohl(qs10->queue_id);
+    oqs->stats.tx_bytes = ntohll(get_32aligned_be64(&qs10->tx_bytes));
+    oqs->stats.tx_packets = ntohll(get_32aligned_be64(&qs10->tx_packets));
+    oqs->stats.tx_errors = ntohll(get_32aligned_be64(&qs10->tx_errors));
+
+    return 0;
+}
+
+static enum ofperr
+ofputil_queue_stats_from_ofp11(struct ofputil_queue_stats *oqs,
+                               const struct ofp11_queue_stats *qs11)
+{
+    enum ofperr error;
+
+    error = ofputil_port_from_ofp11(qs11->port_no, &oqs->port_no);
+    if (error) {
+        return error;
+    }
+
+    oqs->queue_id = ntohl(qs11->queue_id);
+    oqs->stats.tx_bytes = ntohll(qs11->tx_bytes);
+    oqs->stats.tx_packets = ntohll(qs11->tx_packets);
+    oqs->stats.tx_errors = ntohll(qs11->tx_errors);
+
+    return 0;
+}
+
+/* Converts an OFPST_QUEUE_STATS reply in 'msg' into an abstract
+ * ofputil_queue_stats in 'qs'.
+ *
+ * Multiple OFPST_QUEUE_STATS replies can be packed into a single OpenFlow
+ * message.  Calling this function multiple times for a single 'msg' iterates
+ * through the replies.  The caller must initially leave 'msg''s layer pointers
+ * null and not modify them between calls.
+ *
+ * Returns 0 if successful, EOF if no replies were left in this 'msg',
+ * otherwise a positive errno value. */
+int
+ofputil_decode_queue_stats(struct ofputil_queue_stats *qs, struct ofpbuf *msg)
+{
+    enum ofperr error;
+    enum ofpraw raw;
+
+    error = (msg->l2
+             ? ofpraw_decode(&raw, msg->l2)
+             : ofpraw_pull(&raw, msg));
+    if (error) {
+        return error;
+    }
+
+    if (!msg->size) {
+        return EOF;
+    } else if (raw == OFPRAW_OFPST11_QUEUE_REPLY) {
+        const struct ofp11_queue_stats *qs11;
+
+        qs11 = ofpbuf_try_pull(msg, sizeof *qs11);
+        if (!qs11) {
+            VLOG_WARN_RL(&bad_ofmsg_rl, "OFPST_QUEUE reply has %zu leftover "
+                         "bytes at end", msg->size);
+            return OFPERR_OFPBRC_BAD_LEN;
+        }
+        return ofputil_queue_stats_from_ofp11(qs, qs11);
+    } else if (raw == OFPRAW_OFPST10_QUEUE_REPLY) {
+        const struct ofp10_queue_stats *qs10;
+
+        qs10 = ofpbuf_try_pull(msg, sizeof *qs10);
+        if (!qs10) {
+            VLOG_WARN_RL(&bad_ofmsg_rl, "OFPST_QUEUE reply has %zu leftover "
+                         "bytes at end", msg->size);
+            return OFPERR_OFPBRC_BAD_LEN;
+        }
+        return ofputil_queue_stats_from_ofp10(qs, qs10);
+    } else {
+        NOT_REACHED();
+    }
+}
+
+static void
+ofputil_queue_stats_to_ofp10(const struct ofputil_queue_stats *oqs,
+                             struct ofp10_queue_stats *qs10)
+{
+    qs10->port_no = htons(oqs->port_no);
+    memset(qs10->pad, 0, sizeof qs10->pad);
+    qs10->queue_id = htonl(oqs->queue_id);
+    put_32aligned_be64(&qs10->tx_bytes, htonll(oqs->stats.tx_bytes));
+    put_32aligned_be64(&qs10->tx_packets, htonll(oqs->stats.tx_packets));
+    put_32aligned_be64(&qs10->tx_errors, htonll(oqs->stats.tx_errors));
+}
+
+static void
+ofputil_queue_stats_to_ofp11(const struct ofputil_queue_stats *oqs,
+                             struct ofp11_queue_stats *qs11)
+{
+    qs11->port_no = ofputil_port_to_ofp11(oqs->port_no);
+    qs11->queue_id = htonl(oqs->queue_id);
+    qs11->tx_bytes = htonll(oqs->stats.tx_bytes);
+    qs11->tx_packets = htonll(oqs->stats.tx_packets);
+    qs11->tx_errors = htonll(oqs->stats.tx_errors);
+}
+
+/* Encode a queue stat for 'oqs' and append it to 'replies'. */
+void
+ofputil_append_queue_stat(struct list *replies,
+                          const struct ofputil_queue_stats *oqs)
+{
+    struct ofpbuf *msg = ofpbuf_from_list(list_back(replies));
+    struct ofp_header *oh = msg->data;
+
+    switch ((enum ofp_version)oh->version) {
+    case OFP12_VERSION:
+    case OFP11_VERSION: {
+        struct ofp11_queue_stats *reply = ofpmp_append(replies, sizeof *reply);;
+        ofputil_queue_stats_to_ofp11(oqs, reply);
+        break;
+    }
+
+    case OFP10_VERSION: {
+        struct ofp10_queue_stats *reply = ofpmp_append(replies, sizeof *reply);;
+        ofputil_queue_stats_to_ofp10(oqs, reply);
+        break;
+    }
+
+    default:
+        NOT_REACHED();
+    }
 }

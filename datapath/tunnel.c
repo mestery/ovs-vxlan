@@ -100,6 +100,7 @@ static unsigned int key_remote_ports __read_mostly;
 static unsigned int key_multicast_ports __read_mostly;
 static unsigned int local_remote_ports __read_mostly;
 static unsigned int remote_ports __read_mostly;
+static unsigned int null_ports __read_mostly;
 static unsigned int multicast_ports __read_mostly;
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,36)
@@ -218,8 +219,10 @@ static unsigned int *find_port_pool(const struct tnl_mutable_config *mutable)
 			return &key_local_remote_ports;
 		else if (is_multicast)
 			return &key_multicast_ports;
-		else
+		else if (mutable->key.daddr)
 			return &key_remote_ports;
+		else
+			return &null_ports;
 	}
 }
 
@@ -364,12 +367,20 @@ struct vport *ovs_tnl_find_port(struct net *net, __be32 saddr, __be32 daddr,
 		}
 	}
 
+	if (null_ports) {
+		lookup.daddr = 0;
+		lookup.saddr = 0;
+		lookup.tunnel_type = tunnel_type;
+		vport = port_table_lookup(&lookup, mutable);
+		if (vport)
+			return vport;
+	}
 	return NULL;
 }
 
-static void ecn_decapsulate(struct sk_buff *skb, u8 tos)
+static void ecn_decapsulate(struct sk_buff *skb)
 {
-	if (unlikely(INET_ECN_is_ce(tos))) {
+	if (unlikely(INET_ECN_is_ce(OVS_CB(skb)->tun_key->ipv4_tos))) {
 		__be16 protocol = skb->protocol;
 
 		skb_set_network_header(skb, ETH_HLEN);
@@ -416,7 +427,7 @@ static void ecn_decapsulate(struct sk_buff *skb, u8 tos)
  * - skb->csum does not include the inner Ethernet header.
  * - The layer pointers are undefined.
  */
-void ovs_tnl_rcv(struct vport *vport, struct sk_buff *skb, u8 tos)
+void ovs_tnl_rcv(struct vport *vport, struct sk_buff *skb)
 {
 	struct ethhdr *eh;
 
@@ -433,7 +444,7 @@ void ovs_tnl_rcv(struct vport *vport, struct sk_buff *skb, u8 tos)
 	skb_clear_rxhash(skb);
 	secpath_reset(skb);
 
-	ecn_decapsulate(skb, tos);
+	ecn_decapsulate(skb);
 	vlan_set_tci(skb, 0);
 
 	if (unlikely(compute_ip_summed(skb, false))) {
@@ -613,7 +624,7 @@ static void ipv6_build_icmp(struct sk_buff *skb, struct sk_buff *nskb,
 
 bool ovs_tnl_frag_needed(struct vport *vport,
 			 const struct tnl_mutable_config *mutable,
-			 struct sk_buff *skb, unsigned int mtu, __be64 flow_key)
+			 struct sk_buff *skb, unsigned int mtu)
 {
 	unsigned int eth_hdr_len = ETH_HLEN;
 	unsigned int total_length = 0, header_length = 0, payload_length;
@@ -697,17 +708,6 @@ bool ovs_tnl_frag_needed(struct vport *vport,
 		ipv6_build_icmp(skb, nskb, mtu, payload_length);
 #endif
 
-	/*
-	 * Assume that flow based keys are symmetric with respect to input
-	 * and output and use the key that we were going to put on the
-	 * outgoing packet for the fake received packet.  If the keys are
-	 * not symmetric then PMTUD needs to be disabled since we won't have
-	 * any way of synthesizing packets.
-	 */
-	if ((mutable->flags & (TNL_F_IN_KEY_MATCH | TNL_F_OUT_KEY_ACTION)) ==
-	    (TNL_F_IN_KEY_MATCH | TNL_F_OUT_KEY_ACTION))
-		OVS_CB(nskb)->tun_id = flow_key;
-
 	if (unlikely(compute_ip_summed(nskb, false))) {
 		kfree_skb(nskb);
 		return false;
@@ -721,13 +721,25 @@ bool ovs_tnl_frag_needed(struct vport *vport,
 static bool check_mtu(struct sk_buff *skb,
 		      struct vport *vport,
 		      const struct tnl_mutable_config *mutable,
-		      const struct rtable *rt, __be16 *frag_offp)
+		      const struct rtable *rt, __be16 *frag_offp,
+		      int tunnel_hlen)
 {
-	bool df_inherit = mutable->flags & TNL_F_DF_INHERIT;
-	bool pmtud = mutable->flags & TNL_F_PMTUD;
-	__be16 frag_off = mutable->flags & TNL_F_DF_DEFAULT ? htons(IP_DF) : 0;
+	bool df_inherit;
+	bool pmtud;
+	__be16 frag_off;
 	int mtu = 0;
 	unsigned int packet_length = skb->len - ETH_HLEN;
+
+	if (OVS_CB(skb)->tun_key->ipv4_dst) {
+		df_inherit = false;
+		pmtud = false;
+		frag_off = OVS_CB(skb)->tun_key->tun_flags & OVS_FLOW_TNL_F_DONT_FRAGMENT ?
+				  htons(IP_DF) : 0;
+	} else {
+		df_inherit = mutable->flags & TNL_F_DF_INHERIT;
+		pmtud = mutable->flags & TNL_F_PMTUD;
+		frag_off = mutable->flags & TNL_F_DF_DEFAULT ? htons(IP_DF) : 0;
+	}
 
 	/* Allow for one level of tagging in the packet length. */
 	if (!vlan_tx_tag_present(skb) &&
@@ -746,7 +758,7 @@ static bool check_mtu(struct sk_buff *skb,
 
 		mtu = dst_mtu(&rt_dst(rt))
 			- ETH_HLEN
-			- mutable->tunnel_hlen
+			- tunnel_hlen
 			- vlan_header;
 	}
 
@@ -760,8 +772,7 @@ static bool check_mtu(struct sk_buff *skb,
 			mtu = max(mtu, IP_MIN_MTU);
 
 			if (packet_length > mtu &&
-			    ovs_tnl_frag_needed(vport, mutable, skb, mtu,
-						OVS_CB(skb)->tun_id))
+			    ovs_tnl_frag_needed(vport, mutable, skb, mtu))
 				return false;
 		}
 	}
@@ -777,8 +788,7 @@ static bool check_mtu(struct sk_buff *skb,
 			mtu = max(mtu, IPV6_MIN_MTU);
 
 			if (packet_length > mtu &&
-			    ovs_tnl_frag_needed(vport, mutable, skb, mtu,
-						OVS_CB(skb)->tun_id))
+			    ovs_tnl_frag_needed(vport, mutable, skb, mtu))
 				return false;
 		}
 	}
@@ -790,6 +800,7 @@ static bool check_mtu(struct sk_buff *skb,
 
 static void create_tunnel_header(const struct vport *vport,
 				 const struct tnl_mutable_config *mutable,
+				 const struct ovs_key_ipv4_tunnel *tun_key,
 				 const struct rtable *rt, void *header)
 {
 	struct tnl_vport *tnl_vport = tnl_vport_priv(vport);
@@ -806,7 +817,7 @@ static void create_tunnel_header(const struct vport *vport,
 	if (!iph->ttl)
 		iph->ttl = ip4_dst_hoplimit(&rt_dst(rt));
 
-	tnl_vport->tnl_ops->build_header(vport, mutable, iph + 1);
+	tnl_vport->tnl_ops->build_header(vport, mutable, tun_key, iph + 1);
 }
 
 static void *get_cached_header(const struct tnl_cache *cache)
@@ -907,13 +918,21 @@ static struct tnl_cache *build_cache(struct vport *vport,
 				     struct rtable *rt)
 {
 	struct tnl_vport *tnl_vport = tnl_vport_priv(vport);
+	static const struct ovs_key_ipv4_tunnel tun_key;
 	struct tnl_cache *cache;
 	void *cache_data;
 	int cache_len;
 	struct hh_cache *hh;
+	int tunnel_hlen;
 
 	if (!(mutable->flags & TNL_F_HDR_CACHE))
 		return NULL;
+
+	tunnel_hlen = tnl_vport->tnl_ops->hdr_len(mutable, &tun_key);
+	if (tunnel_hlen < 0)
+		return NULL;
+
+	tunnel_hlen += sizeof(struct iphdr);
 
 	/*
 	 * If there is no entry in the ARP cache or if this device does not
@@ -937,7 +956,7 @@ static struct tnl_cache *build_cache(struct vport *vport,
 	else
 		cache = NULL;
 
-	cache_len = LL_RESERVED_SPACE(rt_dst(rt).dev) + mutable->tunnel_hlen;
+	cache_len = LL_RESERVED_SPACE(rt_dst(rt).dev) + tunnel_hlen;
 
 	cache = kzalloc(ALIGN(sizeof(struct tnl_cache), CACHE_DATA_ALIGN) +
 			cache_len, GFP_ATOMIC);
@@ -946,9 +965,9 @@ static struct tnl_cache *build_cache(struct vport *vport,
 
 	create_eth_hdr(cache, hh);
 	cache_data = get_cached_header(cache) + cache->hh_len;
-	cache->len = cache->hh_len + mutable->tunnel_hlen;
+	cache->len = cache->hh_len + tunnel_hlen;
 
-	create_tunnel_header(vport, mutable, rt, cache_data);
+	create_tunnel_header(vport, mutable, &tun_key, rt, cache_data);
 
 	cache->mutable_seq = mutable->seq;
 	cache->rt = rt;
@@ -1000,42 +1019,29 @@ unlock:
 }
 
 static struct rtable *__find_route(const struct tnl_mutable_config *mutable,
-				   u8 ipproto, u8 tos, struct sk_buff *skb)
+				   __be32 saddr, __be32 daddr, u8 ipproto,
+				   u8 tos)
 {
 	/* Tunnel configuration keeps DSCP part of TOS bits, But Linux
 	 * router expect RT_TOS bits only. */
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,39)
 	struct flowi fl = { .nl_u = { .ip4_u = {
-					.daddr = mutable->key.daddr,
-					.saddr = mutable->key.saddr,
+					.daddr = daddr,
+					.saddr = saddr,
 					.tos   = RT_TOS(tos) } },
 					.proto = ipproto };
 	struct rtable *rt;
-
-	if (skb) {
-		if (OVS_CB(skb)->tun_ipv4_dst)
-			fl.fl4_dst = OVS_CB(skb)->tun_ipv4_dst;
-		if (OVS_CB(skb)->tun_ipv4_src)
-			fl.fl4_src = OVS_CB(skb)->tun_ipv4_src;
-	}
 
 	if (unlikely(ip_route_output_key(port_key_get_net(&mutable->key), &rt, &fl)))
 		return ERR_PTR(-EADDRNOTAVAIL);
 
 	return rt;
 #else
-	struct flowi4 fl = { .daddr = mutable->key.daddr,
-			     .saddr = mutable->key.saddr,
+	struct flowi4 fl = { .daddr = daddr,
+			     .saddr = saddr,
 			     .flowi4_tos = RT_TOS(tos),
 			     .flowi4_proto = ipproto };
-
-	if (skb) {
-		if (OVS_CB(skb)->tun_ipv4_dst)
-			fl.daddr = OVS_CB(skb)->tun_ipv4_dst;
-		if (OVS_CB(skb)->tun_ipv4_src)
-			fl.daddr = OVS_CB(skb)->tun_ipv4_src;
-	}
 
 	return ip_route_output_key(port_key_get_net(&mutable->key), &fl);
 #endif
@@ -1043,8 +1049,8 @@ static struct rtable *__find_route(const struct tnl_mutable_config *mutable,
 
 static struct rtable *find_route(struct vport *vport,
 				 const struct tnl_mutable_config *mutable,
-				 u8 tos, struct tnl_cache **cache,
-				 struct sk_buff *skb)
+				 __be32 saddr, __be32 daddr, u8 tos,
+				 struct tnl_cache **cache)
 {
 	struct tnl_vport *tnl_vport = tnl_vport_priv(vport);
 	struct tnl_cache *cur_cache = rcu_dereference(tnl_vport->cache);
@@ -1052,17 +1058,17 @@ static struct rtable *find_route(struct vport *vport,
 	*cache = NULL;
 	tos = RT_TOS(tos);
 
-	if (likely(tos == RT_TOS(mutable->tos) &&
-	    check_cache_valid(cur_cache, mutable))) {
+	if (tos == RT_TOS(mutable->tos) &&
+	    check_cache_valid(cur_cache, mutable)) {
 		*cache = cur_cache;
 		return cur_cache->rt;
 	} else {
 		struct rtable *rt;
 
-		rt = __find_route(mutable, tnl_vport->tnl_ops->ipproto, tos, skb);
+		rt = __find_route(mutable, saddr, daddr,
+				  tnl_vport->tnl_ops->ipproto, tos);
 		if (IS_ERR(rt))
 			return NULL;
-
 		if (likely(tos == RT_TOS(mutable->tos)))
 			*cache = build_cache(vport, mutable, rt);
 
@@ -1091,13 +1097,14 @@ static bool need_linearize(const struct sk_buff *skb)
 
 static struct sk_buff *handle_offloads(struct sk_buff *skb,
 				       const struct tnl_mutable_config *mutable,
-				       const struct rtable *rt)
+				       const struct rtable *rt,
+				       int tunnel_hlen)
 {
 	int min_headroom;
 	int err;
 
 	min_headroom = LL_RESERVED_SPACE(rt_dst(rt).dev) + rt_dst(rt).header_len
-			+ mutable->tunnel_hlen
+			+ tunnel_hlen
 			+ (vlan_tx_tag_present(skb) ? VLAN_HLEN : 0);
 
 	if (skb_headroom(skb) < min_headroom || skb_header_cloned(skb)) {
@@ -1152,14 +1159,14 @@ error:
 }
 
 static int send_frags(struct sk_buff *skb,
-		      const struct tnl_mutable_config *mutable)
+		      int tunnel_hlen)
 {
 	int sent_len;
 
 	sent_len = 0;
 	while (skb) {
 		struct sk_buff *next = skb->next;
-		int frag_len = skb->len - mutable->tunnel_hlen;
+		int frag_len = skb->len - tunnel_hlen;
 		int err;
 
 		skb->next = NULL;
@@ -1188,15 +1195,17 @@ int ovs_tnl_send(struct vport *vport, struct sk_buff *skb)
 {
 	struct tnl_vport *tnl_vport = tnl_vport_priv(vport);
 	const struct tnl_mutable_config *mutable = rcu_dereference(tnl_vport->mutable);
-
 	enum vport_err_type err = VPORT_E_TX_ERROR;
 	struct rtable *rt;
 	struct dst_entry *unattached_dst = NULL;
 	struct tnl_cache *cache;
+	struct ovs_key_ipv4_tunnel tun_key;
 	int sent_len = 0;
+	int tunnel_hlen;
 	__be16 frag_off = 0;
+	__be32 daddr;
+	__be32 saddr;
 	u8 ttl;
-	u8 inner_tos;
 	u8 tos;
 
 	/* Validate the protocol headers before we try to use them. */
@@ -1222,29 +1231,74 @@ int ovs_tnl_send(struct vport *vport, struct sk_buff *skb)
 	}
 #endif
 
-	/* ToS */
-	if (skb->protocol == htons(ETH_P_IP))
-		inner_tos = ip_hdr(skb)->tos;
-#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
-	else if (skb->protocol == htons(ETH_P_IPV6))
-		inner_tos = ipv6_get_dsfield(ipv6_hdr(skb));
-#endif
-	else
-		inner_tos = 0;
+	/* If OVS_CB(skb)->tun_key is NULL, point it at the local tun_key here,
+	 * and zero it out.
+	 */
+	if (!OVS_CB(skb)->tun_key) {
+		memset(&tun_key, 0, sizeof(tun_key));
+		OVS_CB(skb)->tun_key = &tun_key;
+	}
 
-	if (mutable->flags & TNL_F_TOS_INHERIT)
-		tos = inner_tos;
-	else
-		tos = mutable->tos;
+	tunnel_hlen = tnl_vport->tnl_ops->hdr_len(mutable, OVS_CB(skb)->tun_key);
+	if (unlikely(tunnel_hlen < 0)) {
+		err = VPORT_E_TX_DROPPED;
+		goto error_free;
+	}
+	tunnel_hlen += sizeof(struct iphdr);
+
+	if (OVS_CB(skb)->tun_key->ipv4_dst) {
+		daddr = OVS_CB(skb)->tun_key->ipv4_dst;
+		saddr = OVS_CB(skb)->tun_key->ipv4_src;
+		tos = OVS_CB(skb)->tun_key->ipv4_tos;
+		ttl = OVS_CB(skb)->tun_key->ipv4_ttl;
+	} else {
+		u8 inner_tos;
+		daddr = mutable->key.daddr;
+		saddr = mutable->key.saddr;
+
+		if (unlikely(!daddr)) {
+			/* Trying to sent packet from Null-port without
+			 * tunnel info? Drop this packet. */
+			err = VPORT_E_TX_DROPPED;
+			goto error_free;
+		}
+
+		/* ToS */
+		if (skb->protocol == htons(ETH_P_IP))
+			inner_tos = ip_hdr(skb)->tos;
+#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
+		else if (skb->protocol == htons(ETH_P_IPV6))
+			inner_tos = ipv6_get_dsfield(ipv6_hdr(skb));
+#endif
+		else
+			inner_tos = 0;
+
+		if (mutable->flags & TNL_F_TOS_INHERIT)
+			tos = inner_tos;
+		else
+			tos = mutable->tos;
+
+		tos = INET_ECN_encapsulate(tos, inner_tos);
+
+		/* TTL */
+		ttl = mutable->ttl;
+		if (mutable->flags & TNL_F_TTL_INHERIT) {
+			if (skb->protocol == htons(ETH_P_IP))
+				ttl = ip_hdr(skb)->ttl;
+#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
+			else if (skb->protocol == htons(ETH_P_IPV6))
+				ttl = ipv6_hdr(skb)->hop_limit;
+#endif
+		}
+
+	}
 
 	/* Route lookup */
-	rt = find_route(vport, mutable, tos, &cache, skb);
+	rt = find_route(vport, mutable, saddr, daddr, tos, &cache);
 	if (unlikely(!rt))
 		goto error_free;
 	if (unlikely(!cache))
 		unattached_dst = &rt_dst(rt);
-
-	tos = INET_ECN_encapsulate(tos, inner_tos);
 
 	/* Reset SKB */
 	nf_reset(skb);
@@ -1253,12 +1307,12 @@ int ovs_tnl_send(struct vport *vport, struct sk_buff *skb)
 	skb_clear_rxhash(skb);
 
 	/* Offloading */
-	skb = handle_offloads(skb, mutable, rt);
+	skb = handle_offloads(skb, mutable, rt, tunnel_hlen);
 	if (IS_ERR(skb))
 		goto error;
 
 	/* MTU */
-	if (unlikely(!check_mtu(skb, vport, mutable, rt, &frag_off))) {
+	if (unlikely(!check_mtu(skb, vport, mutable, rt, &frag_off, tunnel_hlen))) {
 		err = VPORT_E_TX_DROPPED;
 		goto error_free;
 	}
@@ -1267,25 +1321,19 @@ int ovs_tnl_send(struct vport *vport, struct sk_buff *skb)
 	 * If we are over the MTU, allow the IP stack to handle fragmentation.
 	 * Fragmentation is a slow path anyways.
 	 */
-	if (unlikely(skb->len + mutable->tunnel_hlen > dst_mtu(&rt_dst(rt)) &&
+	if (unlikely(skb->len + tunnel_hlen > dst_mtu(&rt_dst(rt)) &&
 		     cache)) {
 		unattached_dst = &rt_dst(rt);
 		dst_hold(unattached_dst);
 		cache = NULL;
 	}
 
-	/* TTL */
-	ttl = mutable->ttl;
-	if (!ttl)
-		ttl = ip4_dst_hoplimit(&rt_dst(rt));
-
-	if (mutable->flags & TNL_F_TTL_INHERIT) {
-		if (skb->protocol == htons(ETH_P_IP))
-			ttl = ip_hdr(skb)->ttl;
-#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
-		else if (skb->protocol == htons(ETH_P_IPV6))
-			ttl = ipv6_hdr(skb)->hop_limit;
-#endif
+	/* TTL Fixup. */
+	if (!OVS_CB(skb)->tun_key->ipv4_dst) {
+		if (!(mutable->flags & TNL_F_TTL_INHERIT)) {
+			if (!ttl)
+				ttl = ip4_dst_hoplimit(&rt_dst(rt));
+		}
 	}
 
 	while (skb) {
@@ -1303,8 +1351,8 @@ int ovs_tnl_send(struct vport *vport, struct sk_buff *skb)
 			skb_set_network_header(skb, cache->hh_len);
 
 		} else {
-			skb_push(skb, mutable->tunnel_hlen);
-			create_tunnel_header(vport, mutable, rt, skb->data);
+			skb_push(skb, tunnel_hlen);
+			create_tunnel_header(vport, mutable, OVS_CB(skb)->tun_key, rt, skb->data);
 			skb_reset_network_header(skb);
 
 			if (next_skb)
@@ -1323,7 +1371,7 @@ int ovs_tnl_send(struct vport *vport, struct sk_buff *skb)
 		ip_select_ident(iph, &rt_dst(rt), NULL);
 
 		skb = tnl_vport->tnl_ops->update_header(vport, mutable,
-							&rt_dst(rt), skb);
+							&rt_dst(rt), skb, tunnel_hlen);
 		if (unlikely(!skb))
 			goto next;
 
@@ -1356,7 +1404,7 @@ int ovs_tnl_send(struct vport *vport, struct sk_buff *skb)
 					sent_len += orig_len;
 			}
 		} else
-			sent_len += send_frags(skb, mutable);
+			sent_len += send_frags(skb, tunnel_hlen);
 
 next:
 		skb = next_skb;
@@ -1398,8 +1446,10 @@ static int tnl_set_config(struct net *net, struct nlattr *options,
 	struct nlattr *a[OVS_TUNNEL_ATTR_MAX + 1];
 	int err;
 
+	port_key_set_net(&mutable->key, net);
+	mutable->key.tunnel_type = tnl_ops->tunnel_type;
 	if (!options)
-		return -EINVAL;
+		goto out;
 
 	err = nla_parse_nested(a, OVS_TUNNEL_ATTR_MAX, options, tnl_policy);
 	if (err)
@@ -1409,9 +1459,8 @@ static int tnl_set_config(struct net *net, struct nlattr *options,
 		return -EINVAL;
 
 	mutable->flags = nla_get_u32(a[OVS_TUNNEL_ATTR_FLAGS]) & TNL_F_PUBLIC;
-
-	port_key_set_net(&mutable->key, net);
 	mutable->key.daddr = nla_get_be32(a[OVS_TUNNEL_ATTR_DST_IPV4]);
+
 	if (a[OVS_TUNNEL_ATTR_SRC_IPV4]) {
 		if (ipv4_is_multicast(mutable->key.daddr))
 			return -EINVAL;
@@ -1428,7 +1477,6 @@ static int tnl_set_config(struct net *net, struct nlattr *options,
 	if (a[OVS_TUNNEL_ATTR_TTL])
 		mutable->ttl = nla_get_u8(a[OVS_TUNNEL_ATTR_TTL]);
 
-	mutable->key.tunnel_type = tnl_ops->tunnel_type;
 	if (!a[OVS_TUNNEL_ATTR_IN_KEY]) {
 		mutable->key.tunnel_type |= TNL_T_KEY_MATCH;
 		mutable->flags |= TNL_F_IN_KEY_MATCH;
@@ -1442,22 +1490,13 @@ static int tnl_set_config(struct net *net, struct nlattr *options,
 	else
 		mutable->out_key = nla_get_be64(a[OVS_TUNNEL_ATTR_OUT_KEY]);
 
-	mutable->tunnel_hlen = tnl_ops->hdr_len(mutable);
-	if (mutable->tunnel_hlen < 0)
-		return mutable->tunnel_hlen;
-
-	mutable->tunnel_hlen += sizeof(struct iphdr);
-
-	old_vport = port_table_lookup(&mutable->key, &old_mutable);
-	if (old_vport && old_vport != cur_vport)
-		return -EEXIST;
-
 	mutable->mlink = 0;
 	if (ipv4_is_multicast(mutable->key.daddr)) {
 		struct net_device *dev;
 		struct rtable *rt;
 
-		rt = __find_route(mutable, tnl_ops->ipproto, mutable->tos, NULL);
+		rt = __find_route(mutable, mutable->key.saddr, mutable->key.daddr,
+				  tnl_ops->ipproto, mutable->tos);
 		if (IS_ERR(rt))
 			return -EADDRNOTAVAIL;
 		dev = rt_dst(rt).dev;
@@ -1467,6 +1506,11 @@ static int tnl_set_config(struct net *net, struct nlattr *options,
 		mutable->mlink = dev->ifindex;
 		ip_mc_inc_group(__in_dev_get_rtnl(dev), mutable->key.daddr);
 	}
+
+out:
+	old_vport = port_table_lookup(&mutable->key, &old_mutable);
+	if (old_vport && old_vport != cur_vport)
+		return -EEXIST;
 
 	return 0;
 }
@@ -1536,6 +1580,10 @@ int ovs_tnl_set_options(struct vport *vport, struct nlattr *options)
 	struct tnl_mutable_config *mutable;
 	int err;
 
+	old_mutable = rtnl_dereference(tnl_vport->mutable);
+	if (!old_mutable->key.daddr)
+		return -EINVAL;
+
 	mutable = kzalloc(sizeof(struct tnl_mutable_config), GFP_KERNEL);
 	if (!mutable) {
 		err = -ENOMEM;
@@ -1543,7 +1591,6 @@ int ovs_tnl_set_options(struct vport *vport, struct nlattr *options)
 	}
 
 	/* Copy fields whose values should be retained. */
-	old_mutable = rtnl_dereference(tnl_vport->mutable);
 	mutable->seq = old_mutable->seq + 1;
 	memcpy(mutable->eth_addr, old_mutable->eth_addr, ETH_ALEN);
 

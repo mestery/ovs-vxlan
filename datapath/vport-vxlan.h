@@ -46,7 +46,8 @@ static inline struct vxlanhdr *vxlan_hdr(const struct sk_buff *skb)
 
 #define VXLAN_HLEN (sizeof(struct udphdr) + sizeof(struct vxlanhdr))
 
-static inline int vxlan_hdr_len(const struct tnl_mutable_config *mutable)
+static inline int vxlan_hdr_len(const struct tnl_mutable_config *mutable,
+				const struct ovs_key_ipv4_tunnel *tun_key)
 {
 	return VXLAN_HLEN;
 }

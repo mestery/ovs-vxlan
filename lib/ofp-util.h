@@ -36,7 +36,7 @@ enum ofperr ofputil_port_from_ofp11(ovs_be32 ofp11_port, uint16_t *ofp10_port);
 ovs_be32 ofputil_port_to_ofp11(uint16_t ofp10_port);
 
 enum ofperr ofputil_check_output_port(uint16_t ofp_port, int max_ports);
-uint16_t ofputil_port_from_string(const char *);
+bool ofputil_port_from_string(const char *, uint16_t *portp);
 void ofputil_format_port(uint16_t port, struct ds *);
 
 /* Converting OFPFW10_NW_SRC_MASK and OFPFW10_NW_DST_MASK wildcard bit counts
@@ -540,6 +540,7 @@ bool ofputil_frag_handling_from_string(const char *, enum ofp_config_flags *);
  * OFPUTIL_OFPAT10_ENQUEUE
  * OFPUTIL_NXAST_RESUBMIT
  * OFPUTIL_NXAST_SET_TUNNEL
+ * OFPUTIL_NXAST_SET_METADATA
  * OFPUTIL_NXAST_SET_QUEUE
  * OFPUTIL_NXAST_POP_QUEUE
  * OFPUTIL_NXAST_REG_MOVE
@@ -619,5 +620,44 @@ union ofp_action *ofputil_actions_clone(const union ofp_action *, size_t n);
 
 /* Handy utility for parsing flows and actions. */
 bool ofputil_parse_key_value(char **stringp, char **keyp, char **valuep);
+
+struct ofpbuf *ofputlil_dump_ports(enum ofp_version ofp_version, int16_t port);
+
+struct ofputil_port_stats {
+    uint16_t port_no;
+    struct netdev_stats stats;
+};
+
+struct ofpbuf *ofputil_encode_dump_ports_request(enum ofp_version ofp_version,
+                                                 int16_t port);
+void ofputil_append_port_stat(struct list *replies,
+                              const struct ofputil_port_stats *ops);
+size_t ofputil_count_port_stats(const struct ofp_header *);
+int ofputil_decode_port_stats(struct ofputil_port_stats *, struct ofpbuf *msg);
+enum ofperr ofputil_decode_port_stats_request(const struct ofp_header *request,
+                                              uint16_t *ofp10_port);
+
+struct ofputil_queue_stats_request {
+    uint16_t port_no;
+    uint32_t queue_id;
+};
+
+enum ofperr
+ofputil_decode_queue_stats_request(const struct ofp_header *request,
+                                   struct ofputil_queue_stats_request *oqsr);
+struct ofpbuf *
+ofputil_encode_queue_stats_request(enum ofp_version ofp_version,
+                                   const struct ofputil_queue_stats_request *oqsr);
+
+struct ofputil_queue_stats {
+    uint16_t port_no;
+    uint32_t queue_id;
+    struct netdev_queue_stats stats;
+};
+
+size_t ofputil_count_queue_stats(const struct ofp_header *);
+int ofputil_decode_queue_stats(struct ofputil_queue_stats *qs, struct ofpbuf *msg);
+void ofputil_append_queue_stat(struct list *replies,
+                               const struct ofputil_queue_stats *oqs);
 
 #endif /* ofp-util.h */

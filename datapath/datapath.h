@@ -96,7 +96,8 @@ struct datapath {
 /**
  * struct ovs_skb_cb - OVS data in skb CB
  * @flow: The flow associated with this packet.  May be %NULL if no flow.
- * @tun_id: ID of the tunnel that encapsulated this packet.  It is 0 if the
+ * @tun_key: Key for the tunnel that encapsulated this packet. NULL if the
+ * packet is not being tunneled.
  * @ip_summed: Consistently stores L4 checksumming status across different
  * kernel versions.
  * @csum_start: Stores the offset from which to start checksumming independent
@@ -107,11 +108,7 @@ struct datapath {
  */
 struct ovs_skb_cb {
 	struct sw_flow		*flow;
-	__be64			tun_id;
-	__be32			tun_ipv4_src;       /* Outer tunnel src IP */
-	__be32			tun_ipv4_dst;       /* Outer tunnel dst IP */
-	u8			tun_ipv4_tos;       /* Outer tunnel IP TOS */
-	u8			tun_ipv4_ttl;       /* Outer tunnel IP TTL */
+	struct ovs_key_ipv4_tunnel  *tun_key;
 #ifdef NEED_CSUM_NORMALIZE
 	enum csum_type		ip_summed;
 	u16			csum_start;

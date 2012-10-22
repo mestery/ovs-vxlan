@@ -1,5 +1,8 @@
 post-v1.8.0
 ------------------------
+    - The tunneling code no longer assumes input and output keys are symmetric.
+      If they are not, PMTUD needs to be disabled for tunneling to work. Note
+      this only applies to flow-based keys.
     - FreeBSD is now a supported platform, thanks to code contributions from
       Gaetano Catalli, Ed Maste, and Giuseppe Lettieri.
     - ovs-bugtool: New --ovs option to report only OVS related information.
@@ -9,14 +12,13 @@ post-v1.8.0
     - OpenFlow:
       - Allow bitwise masking for SHA and THA fields in ARP, SLL and TLL
         fields in IPv6 neighbor discovery messages, and IPv6 flow label.
+      - Adds support for writing to the metadata field for a flow.
     - ovs-ofctl:
       - Commands and actions that accept port numbers now also accept keywords
         that represent those ports (such as LOCAL, NONE, and ALL).  This is
         also the recommended way to specify these ports, for compatibility
         with OpenFlow 1.1 and later (which use the OpenFlow 1.0 numbers
         for these ports for different purposes).
-      - Commands and actions that accept port numbers no longer accept port 0,
-        which is not a valid port number in OpenFlow 1.0 and later.
     - ovs-dpctl:
       - Support requesting the port number with the "port_no" option in
         the "add-if" command.

@@ -5460,6 +5460,7 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
     }
     OFPACT_FOR_EACH (a, ofpacts, ofpacts_len) {
         struct ofpact_controller *controller;
+        const struct ofpact_metadata *metadata;
 
         if (ctx->exit) {
             break;
@@ -5599,6 +5600,29 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
             ctx->has_fin_timeout = true;
             xlate_fin_timeout(ctx, ofpact_get_FIN_TIMEOUT(a));
             break;
+
+        case OFPACT_CLEAR_ACTIONS:
+            /* TODO:XXX
+             * Nothing to do because writa-actions is not supported for now.
+             * When writa-actions is supported, clear-actions also must
+             * be supported at the same time.
+             */
+            break;
+
+        case OFPACT_WRITE_METADATA:
+            metadata = ofpact_get_WRITE_METADATA(a);
+            ctx->flow.metadata &= ~metadata->mask;
+            ctx->flow.metadata |= metadata->metadata & metadata->mask;
+            break;
+
+        case OFPACT_GOTO_TABLE: {
+            /* TODO:XXX remove recursion */
+            /* It is assumed that goto-table is last action */
+            struct ofpact_goto_table *ogt = ofpact_get_GOTO_TABLE(a);
+            assert(ctx->table_id < ogt->table_id);
+            xlate_table_action(ctx, ctx->flow.in_port, ogt->table_id, true);
+            break;
+        }
         }
     }
 
