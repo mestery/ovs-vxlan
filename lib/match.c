@@ -21,6 +21,10 @@
 #include "byte-order.h"
 #include "dynamic-string.h"
 #include "packets.h"
+#include "vlog.h"
+
+VLOG_DEFINE_THIS_MODULE(match);
+
 
 /* Converts the flow in 'flow' into a match in 'match', with the given
  * 'wildcards'. */
@@ -31,6 +35,84 @@ match_init(struct match *match,
     match->flow = *flow;
     match->wc = *wc;
     match_zero_wildcarded_fields(match);
+}
+
+/* Converts a flow into a match.  It sets the wildcard masks based on
+ * the packet contents.  It will not set the mask for fields that do not
+ * make sense for the packet type. */
+void
+match_wc_init(struct match *match, const struct flow *flow)
+{
+    struct flow_wildcards *wc;
+    int i;
+
+    match->flow = *flow;
+    wc = &match->wc;
+    memset(&wc->masks, 0x0, sizeof wc->masks);
+
+    memset(&wc->masks.dl_type, 0xff, sizeof wc->masks.dl_type);
+
+    if (flow->nw_proto) {
+        memset(&wc->masks.nw_proto, 0xff, sizeof wc->masks.nw_proto);
+    }
+
+    for (i = 0; i < FLOW_N_REGS; i++) {
+        if (flow->regs[i]) {
+            memset(&wc->masks.regs[i], 0xff, sizeof wc->masks.regs[i]);
+        }
+    }
+
+    if (flow->tunnel.ip_dst || flow->tunnel.tun_id) {
+        memset(&wc->masks.tunnel.tun_id, 0xff, sizeof wc->masks.tunnel.tun_id);
+        memset(&wc->masks.tunnel.ip_src, 0xff, sizeof wc->masks.tunnel.ip_src);
+        memset(&wc->masks.tunnel.ip_dst, 0xff, sizeof wc->masks.tunnel.ip_dst);
+        memset(&wc->masks.tunnel.flags, 0xff, sizeof wc->masks.tunnel.flags);
+        memset(&wc->masks.tunnel.ip_tos, 0xff, sizeof wc->masks.tunnel.ip_tos);
+        memset(&wc->masks.tunnel.ip_ttl, 0xff, sizeof wc->masks.tunnel.ip_ttl);
+    }
+    memset(&wc->masks.metadata, 0xff, sizeof wc->masks.metadata);
+    memset(&wc->masks.in_port, 0xff, sizeof wc->masks.in_port);
+    memset(&wc->masks.vlan_tci, 0xff, sizeof wc->masks.vlan_tci);
+    memset(&wc->masks.dl_src, 0xff, sizeof wc->masks.dl_src);
+    memset(&wc->masks.dl_dst, 0xff, sizeof wc->masks.dl_dst);
+
+    if (flow->dl_type == htons(ETH_TYPE_IPV6)) {
+        memset(&wc->masks.ipv6_src, 0xff, sizeof wc->masks.ipv6_src);
+        memset(&wc->masks.ipv6_dst, 0xff, sizeof wc->masks.ipv6_dst);
+        memset(&wc->masks.ipv6_label, 0xff, sizeof wc->masks.ipv6_label);
+    } else if (flow->dl_type == htons(ETH_TYPE_IP) ||
+               (flow->dl_type == htons(ETH_TYPE_ARP))) {
+        memset(&wc->masks.nw_src, 0xff, sizeof wc->masks.nw_src);
+        memset(&wc->masks.nw_dst, 0xff, sizeof wc->masks.nw_dst);
+    }
+
+    if (flow->dl_type == htons(ETH_TYPE_ARP)) {
+        memset(&wc->masks.arp_sha, 0xff, sizeof wc->masks.arp_sha);
+        memset(&wc->masks.arp_tha, 0xff, sizeof wc->masks.arp_tha);
+    }
+
+    if (flow->dl_type == htons(ETH_TYPE_IPV6) ||
+        flow->dl_type == htons(ETH_TYPE_IP)) {
+        memset(&wc->masks.nw_tos, 0xff, sizeof wc->masks.nw_tos);
+        memset(&wc->masks.nw_ttl, 0xff, sizeof wc->masks.nw_ttl);
+    }
+
+    if (flow->nw_frag) {
+        memset(&wc->masks.nw_frag, 0xff, sizeof wc->masks.nw_frag);
+    }
+
+    if (flow->nw_proto == IPPROTO_ICMP || flow->nw_proto == IPPROTO_ICMPV6 ||
+        (flow->tp_src || flow->tp_dst)) {
+        memset(&wc->masks.tp_src, 0xff, sizeof wc->masks.tp_src);
+        memset(&wc->masks.tp_dst, 0xff, sizeof wc->masks.tp_dst);
+    }
+
+    if (flow->nw_proto == IPPROTO_ICMPV6) {
+        memset(&wc->masks.arp_sha, 0xff, sizeof wc->masks.arp_sha);
+        memset(&wc->masks.arp_tha, 0xff, sizeof wc->masks.arp_tha);
+    }
+
+    return;
 }
 
 /* Converts the flow in 'flow' into an exact-match match in 'match'. */
@@ -698,6 +780,9 @@ match_format(const struct match *match, struct ds *s, unsigned int priority)
                               ntohl(wc->masks.ipv6_label));
             }
         }
+    } else if (f->dl_type == htons(ETH_TYPE_ARP)) {
+        format_ip_netmask(s, "arp_spa", f->nw_src, wc->masks.nw_src);
+        format_ip_netmask(s, "arp_tpa", f->nw_dst, wc->masks.nw_dst);
     } else {
         format_ip_netmask(s, "nw_src", f->nw_src, wc->masks.nw_src);
         format_ip_netmask(s, "nw_dst", f->nw_dst, wc->masks.nw_dst);
@@ -740,10 +825,12 @@ match_format(const struct match *match, struct ds *s, unsigned int priority)
                       f->nw_frag & FLOW_NW_FRAG_LATER ? "later" : "not_later");
         break;
     }
-    if (f->nw_proto == IPPROTO_ICMP) {
+    if (f->dl_type == htons(ETH_TYPE_IP) &&
+        f->nw_proto == IPPROTO_ICMP) {
         format_be16_masked(s, "icmp_type", f->tp_src, wc->masks.tp_src);
         format_be16_masked(s, "icmp_code", f->tp_dst, wc->masks.tp_dst);
-    } else if (f->nw_proto == IPPROTO_ICMPV6) {
+    } else if (f->dl_type == htons(ETH_TYPE_IPV6) &&
+               f->nw_proto == IPPROTO_ICMPV6) {
         format_be16_masked(s, "icmp_type", f->tp_src, wc->masks.tp_src);
         format_be16_masked(s, "icmp_code", f->tp_dst, wc->masks.tp_dst);
         format_ipv6_netmask(s, "nd_target", &f->nd_target,
