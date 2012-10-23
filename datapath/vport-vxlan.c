@@ -103,6 +103,7 @@ static int vxlan_rcv(struct sock *sk, struct sk_buff *skb)
 	struct vxlanhdr *vxh;
 	const struct tnl_mutable_config *mutable;
 	struct iphdr *iph;
+	struct ovs_key_ipv4_tunnel tun_key;
 	int tunnel_type;
 	__be64 key;
 
@@ -133,15 +134,8 @@ static int vxlan_rcv(struct sock *sk, struct sk_buff *skb)
 	skb_postpull_rcsum(skb, skb_transport_header(skb), VXLAN_HLEN + ETH_HLEN);
 
 	/* Save outer tunnel values */
-	OVS_CB(skb)->tun_key->ipv4_src = iph->saddr;
-	OVS_CB(skb)->tun_key->ipv4_dst = iph->daddr;
-	OVS_CB(skb)->tun_key->ipv4_tos = iph->tos;
-	OVS_CB(skb)->tun_key->ipv4_ttl = iph->ttl;
-
-	if (mutable->flags & TNL_F_IN_KEY_MATCH)
-		OVS_CB(skb)->tun_key->tun_id = key;
-	else
-		OVS_CB(skb)->tun_key->tun_id = 0;
+	tnl_tun_key_init(&tun_key, iph, key, OVS_FLOW_TNL_F_KEY);
+	OVS_CB(skb)->tun_key = &tun_key;
 
 	ovs_tnl_rcv(vport, skb);
 	goto out;
