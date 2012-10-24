@@ -61,7 +61,7 @@
 #include "vport-internal_dev.h"
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,18) || \
-    LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+    LINUX_VERSION_CODE >= KERNEL_VERSION(3,7,0)
 #error Kernels before 2.6.18 or after 3.5 are not supported by this version of Open vSwitch.
 #endif
 

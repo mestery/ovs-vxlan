@@ -47,12 +47,18 @@ static void vxlan_build_header(const struct vport *vport,
 {
 	struct udphdr *udph = header;
 	struct vxlanhdr *vxh = (struct vxlanhdr *)(udph + 1);
+	__be64 out_key;
+
+	if (tun_key->ipv4_dst)
+		out_key = tun_key->tun_id;
+	else
+		out_key = mutable->out_key;
 
 	udph->dest = htons(VXLAN_DST_PORT);
 	udph->check = 0;
 
 	vxh->vx_flags = htonl(VXLAN_FLAGS);
-	vxh->vx_vni = htonl(be64_to_cpu(tun_key->tun_id) << 8);
+	vxh->vx_vni = htonl(be64_to_cpu(out_key) << 8);
 }
 
 static struct sk_buff *vxlan_update_header(const struct vport *vport,
@@ -62,9 +68,16 @@ static struct sk_buff *vxlan_update_header(const struct vport *vport,
 {
 	struct udphdr *udph = udp_hdr(skb);
 	struct vxlanhdr *vxh = (struct vxlanhdr *)(udph + 1);
+	const struct ovs_key_ipv4_tunnel *tun_key = OVS_CB(skb)->tun_key;
+	__be64 out_key;
+
+	if (tun_key->ipv4_dst)
+		out_key = tun_key->tun_id;
+	else
+		out_key = mutable->out_key;
 
 	if (mutable->flags & TNL_F_OUT_KEY_ACTION)
-		vxh->vx_vni = htonl(be64_to_cpu(OVS_CB(skb)->tun_key->tun_id) << 8);
+		vxh->vx_vni = htonl(be64_to_cpu(out_key) << 8);
 
 	udph->source = get_src_port(skb, mutable);
 	udph->len = htons(skb->len - skb_transport_offset(skb));
