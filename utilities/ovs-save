@@ -177,6 +177,10 @@ save_flows () {
     done
 }
 
+ovs_vsctl () {
+    ovs-vsctl --no-wait --timeout=5 "$@"
+}
+
 save_datapaths () {
     if missing_program ovs-dpctl; then
         echo "$0: ovs-dpctl not found in $PATH" >&2
@@ -195,7 +199,7 @@ save_datapaths () {
             # lookups: hit:0 missed:0 lost:0
             # flows: 0
             # port 0: br1 (internal)
-            # port 2: gre2886795521 (ipsec_gre: key=flow, pmtud=false, remote_ip=172.17.1.1, tos=inherit)
+            # port 2: gre2886795521 (ipsec_gre: key=flow, remote_ip=172.17.1.1, tos=inherit)
             # port 3: gre1 (ipsec_gre: remote_ip=192.168.113.1)
             # port 14: gre2 (gre: remote_ip=192.168.115.1)
             # port 15: gre3 (gre64: remote_ip=192.168.116.1)
@@ -225,20 +229,20 @@ save_datapaths () {
             # For ipsec, ovs-dpctl does not show the key value pairs related
             # to certificates. Get that information from ovs-vsctl.
             if [ "${type}" = "ipsec_gre" ] ; then
-                if peer_cert=`ovs-vsctl get interface \
+                if peer_cert=`ovs_vsctl get interface \
                                 "${netdev}" options:peer_cert 2>/dev/null`; then
                     # The option peer_cert comes with an accompanying
                     # "certificate" or "use_ssl_cert"
-                    if certificate=`ovs-vsctl get interface "${netdev}" \
+                    if certificate=`ovs_vsctl get interface "${netdev}" \
                             options:certificate 2>/dev/null` ; then
                         command="${command},peer_cert=${peer_cert},certificate=${certificate}"
                     else
-                        use_ssl_cert=`ovs-vsctl get interface "${netdev}" \
+                        use_ssl_cert=`ovs_vsctl get interface "${netdev}" \
                                         options:use_ssl_cert 2>/dev/null`
                         command="${command},peer_cert=${peer_cert},use_ssl_cert=${use_ssl_cert}"
                     fi
                 else
-                    psk=`ovs-vsctl get interface "${netdev}" \
+                    psk=`ovs_vsctl get interface "${netdev}" \
                             options:psk 2>/dev/null`
                     command="${command},psk=${psk}"
                 fi

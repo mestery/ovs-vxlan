@@ -32,14 +32,12 @@
 #include "dummy.h"
 #include "dynamic-string.h"
 #include "fatal-signal.h"
+#include "hash.h"
+#include "hmap.h"
 #include "signals.h"
 #include "unixctl.h"
 #include "util.h"
 #include "vlog.h"
-
-#ifndef HAVE_EXECINFO_H
-#define HAVE_EXECINFO_H 0
-#endif
 
 VLOG_DEFINE_THIS_MODULE(timeval);
 
@@ -72,12 +70,15 @@ static long long int deadline = LLONG_MAX;
 struct trace {
     void *backtrace[32]; /* Populated by backtrace(). */
     size_t n_frames;     /* Number of frames in 'backtrace'. */
+
+    /* format_backtraces() helper data. */
+    struct hmap_node node;
+    size_t count;
 };
 
 #define MAX_TRACES 50
-static struct unixctl_conn *backtrace_conn = NULL;
-static struct trace *traces = NULL;
-static size_t n_traces = 0;
+static struct trace traces[MAX_TRACES];
+static size_t trace_head = 0;
 
 static void set_up_timer(void);
 static void set_up_signal(int flags);
@@ -91,8 +92,23 @@ static struct rusage *get_recent_rusage(void);
 static void refresh_rusage(void);
 static void timespec_add(struct timespec *sum,
                          const struct timespec *a, const struct timespec *b);
-static void trace_run(void);
 static unixctl_cb_func backtrace_cb;
+
+#ifndef HAVE_EXECINFO_H
+#define HAVE_EXECINFO_H 0
+
+static int
+backtrace(void **buffer OVS_UNUSED, int size OVS_UNUSED)
+{
+    NOT_REACHED();
+}
+
+static char **
+backtrace_symbols(void *const *buffer OVS_UNUSED, int size OVS_UNUSED)
+{
+    NOT_REACHED();
+}
+#endif
 
 /* Initializes the timetracking module, if not already initialized. */
 static void
@@ -100,15 +116,22 @@ time_init(void)
 {
     static bool inited;
 
-    /* The best place to do this is probably a timeval_run() function.
-     * However, none exists and this function is usually so fast that doing it
-     * here seems fine for now. */
-    trace_run();
-
     if (inited) {
         return;
     }
     inited = true;
+
+    /* The implementation of backtrace() in glibc does some one time
+     * initialization which is not signal safe.  This can cause deadlocks if
+     * run from the signal handler.  As a workaround, force the initialization
+     * to happen here. */
+    if (HAVE_EXECINFO_H) {
+        void *bt[1];
+
+        backtrace(bt, ARRAY_SIZE(bt));
+    }
+
+    memset(traces, 0, sizeof traces);
 
     if (HAVE_EXECINFO_H && CACHE_TIME) {
         unixctl_command_register("backtrace", "", 0, 0, backtrace_cb, NULL);
@@ -377,7 +400,7 @@ time_poll(struct pollfd *pollfds, int n_pollfds, long long int timeout_when,
             break;
         }
 
-        if (!blocked && CACHE_TIME && !backtrace_conn) {
+        if (!blocked && CACHE_TIME) {
             block_sigalrm(&oldsigs);
             blocked = true;
         }
@@ -397,13 +420,13 @@ sigalrm_handler(int sig_nr OVS_UNUSED)
     wall_tick = true;
     monotonic_tick = true;
 
-#if HAVE_EXECINFO_H
-    if (backtrace_conn && n_traces < MAX_TRACES) {
-        struct trace *trace = &traces[n_traces++];
+    if (HAVE_EXECINFO_H && CACHE_TIME) {
+        struct trace *trace = &traces[trace_head];
+
         trace->n_frames = backtrace(trace->backtrace,
                                     ARRAY_SIZE(trace->backtrace));
+        trace_head = (trace_head + 1) % MAX_TRACES;
     }
-#endif
 }
 
 static void
@@ -580,45 +603,87 @@ get_cpu_usage(void)
     return cpu_usage;
 }
 
-static void
-trace_run(void)
+static uint32_t
+hash_trace(struct trace *trace)
 {
-#if HAVE_EXECINFO_H
-    if (backtrace_conn && n_traces >= MAX_TRACES) {
-        struct unixctl_conn *reply_conn = backtrace_conn;
-        struct ds ds = DS_EMPTY_INITIALIZER;
+    return hash_bytes(trace->backtrace,
+                      trace->n_frames * sizeof *trace->backtrace, 0);
+}
+
+static struct trace *
+trace_map_lookup(struct hmap *trace_map, struct trace *key)
+{
+    struct trace *value;
+
+    HMAP_FOR_EACH_WITH_HASH (value, node, hash_trace(key), trace_map) {
+        if (key->n_frames == value->n_frames
+            && !memcmp(key->backtrace, value->backtrace,
+                       key->n_frames * sizeof *key->backtrace)) {
+            return value;
+        }
+    }
+    return NULL;
+}
+
+/*  Appends a string to 'ds' representing backtraces recorded at regular
+ *  intervals in the recent past.  This information can be used to get a sense
+ *  of what the process has been spending the majority of time doing.  Will
+ *  ommit any backtraces which have not occurred at least 'min_count' times. */
+void
+format_backtraces(struct ds *ds, size_t min_count)
+{
+    time_init();
+
+    if (HAVE_EXECINFO_H && CACHE_TIME) {
+        struct hmap trace_map = HMAP_INITIALIZER(&trace_map);
+        struct trace *trace, *next;
         sigset_t oldsigs;
         size_t i;
 
         block_sigalrm(&oldsigs);
 
-        for (i = 0; i < n_traces; i++) {
+        for (i = 0; i < MAX_TRACES; i++) {
             struct trace *trace = &traces[i];
+            struct trace *map_trace;
+
+            if (!trace->n_frames) {
+                continue;
+            }
+
+            map_trace = trace_map_lookup(&trace_map, trace);
+            if (map_trace) {
+                map_trace->count++;
+            } else {
+                hmap_insert(&trace_map, &trace->node, hash_trace(trace));
+                trace->count = 1;
+            }
+        }
+
+        HMAP_FOR_EACH_SAFE (trace, next, node, &trace_map) {
             char **frame_strs;
             size_t j;
 
+            hmap_remove(&trace_map, &trace->node);
+
+            if (trace->count < min_count) {
+                continue;
+            }
+
             frame_strs = backtrace_symbols(trace->backtrace, trace->n_frames);
 
-            ds_put_format(&ds, "Backtrace %zu\n", i + 1);
+            ds_put_format(ds, "Count %zu\n", trace->count);
             for (j = 0; j < trace->n_frames; j++) {
-                ds_put_format(&ds, "%s\n", frame_strs[j]);
+                ds_put_format(ds, "%s\n", frame_strs[j]);
             }
-            ds_put_cstr(&ds, "\n");
+            ds_put_cstr(ds, "\n");
 
             free(frame_strs);
         }
+        hmap_destroy(&trace_map);
 
-        free(traces);
-        traces = NULL;
-        n_traces = 0;
-        backtrace_conn = NULL;
-
+        ds_chomp(ds, '\n');
         unblock_sigalrm(&oldsigs);
-
-        unixctl_command_reply(reply_conn, ds_cstr(&ds));
-        ds_destroy(&ds);
     }
-#endif
 }
 
 /* Unixctl interface. */
@@ -664,21 +729,12 @@ backtrace_cb(struct unixctl_conn *conn,
              int argc OVS_UNUSED, const char *argv[] OVS_UNUSED,
              void *aux OVS_UNUSED)
 {
-    sigset_t oldsigs;
+    struct ds ds = DS_EMPTY_INITIALIZER;
 
     assert(HAVE_EXECINFO_H && CACHE_TIME);
-
-    if (backtrace_conn) {
-        unixctl_command_reply_error(conn, "In Use");
-        return;
-    }
-    assert(!traces);
-
-    block_sigalrm(&oldsigs);
-    backtrace_conn = conn;
-    traces = xmalloc(MAX_TRACES * sizeof *traces);
-    n_traces = 0;
-    unblock_sigalrm(&oldsigs);
+    format_backtraces(&ds, 0);
+    unixctl_command_reply(conn, ds_cstr(&ds));
+    ds_destroy(&ds);
 }
 
 void

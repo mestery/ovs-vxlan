@@ -1394,7 +1394,8 @@
         of the tunnel headers.  Note that this option causes behavior that is
         typically reserved for routers and therefore is not entirely in
         compliance with the IEEE 802.1D specification for bridges.  Default is
-        enabled; set to <code>false</code> to disable.
+        disabled; set to <code>true</code> to enable.  This feature is
+        deprecated and will be removed soon.
       </column>
 
       <group title="Tunnel Options: gre and vxlan only">

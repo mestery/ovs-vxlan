@@ -435,13 +435,10 @@ flow_extract(struct ofpbuf *packet, uint32_t skb_priority,
                 flow->nw_proto = ntohs(arp->ar_op);
             }
 
-            if ((flow->nw_proto == ARP_OP_REQUEST)
-                || (flow->nw_proto == ARP_OP_REPLY)) {
-                flow->nw_src = arp->ar_spa;
-                flow->nw_dst = arp->ar_tpa;
-                memcpy(flow->arp_sha, arp->ar_sha, ETH_ADDR_LEN);
-                memcpy(flow->arp_tha, arp->ar_tha, ETH_ADDR_LEN);
-            }
+            flow->nw_src = arp->ar_spa;
+            flow->nw_dst = arp->ar_tpa;
+            memcpy(flow->arp_sha, arp->ar_sha, ETH_ADDR_LEN);
+            memcpy(flow->arp_tha, arp->ar_tha, ETH_ADDR_LEN);
         }
     }
 }
@@ -770,6 +767,7 @@ flow_compose(struct ofpbuf *b, const struct flow *flow)
         b->l3 = ip = ofpbuf_put_zeros(b, sizeof *ip);
         ip->ip_ihl_ver = IP_IHL_VER(5, 4);
         ip->ip_tos = flow->nw_tos;
+        ip->ip_ttl = flow->nw_ttl;
         ip->ip_proto = flow->nw_proto;
         ip->ip_src = flow->nw_src;
         ip->ip_dst = flow->nw_dst;
