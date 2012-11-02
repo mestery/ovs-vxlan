@@ -591,7 +591,7 @@ static int
 parse_tunnel_config(const char *name, const char *type,
                     const struct smap *args, struct ofpbuf *options)
 {
-    bool is_ipsec;
+    bool is_ipsec = false;
     bool is_gre;
     bool supports_csum;
     struct smap_node *node;
