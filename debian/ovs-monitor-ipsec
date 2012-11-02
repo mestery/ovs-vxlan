@@ -56,7 +56,6 @@ def unixctl_exit(conn, unused_argv, unused_aux):
     global exiting
     exiting = True
     conn.reply(None)
-=======
 
 
 # Class to configure the racoon daemon, which handles IKE negotiation
