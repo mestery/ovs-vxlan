@@ -372,6 +372,13 @@ dpif_base_name(const struct dpif *dpif)
     return dpif->base_name;
 }
 
+/* Returns the type of datapath 'dpif'. */
+const char *
+dpif_type(const struct dpif *dpif)
+{
+    return dpif->dpif_class->type;
+}
+
 /* Returns the fully spelled out name for the given datapath 'type'.
  *
  * Normalized type string can be compared with strcmp().  Unnormalized type
@@ -411,18 +418,18 @@ dpif_get_dp_stats(const struct dpif *dpif, struct dpif_dp_stats *stats)
 }
 
 /* Attempts to add 'netdev' as a port on 'dpif'.  If 'port_nop' is
- * non-null and its value is not UINT16_MAX, then attempts to use the
+ * non-null and its value is not UINT32_MAX, then attempts to use the
  * value as the port number.
  *
  * If successful, returns 0 and sets '*port_nop' to the new port's port
  * number (if 'port_nop' is non-null).  On failure, returns a positive
- * errno value and sets '*port_nop' to UINT16_MAX (if 'port_nop' is
+ * errno value and sets '*port_nop' to UINT32_MAX (if 'port_nop' is
  * non-null). */
 int
-dpif_port_add(struct dpif *dpif, struct netdev *netdev, uint16_t *port_nop)
+dpif_port_add(struct dpif *dpif, struct netdev *netdev, uint32_t *port_nop)
 {
     const char *netdev_name = netdev_get_name(netdev);
-    uint16_t port_no = UINT16_MAX;
+    uint32_t port_no = UINT32_MAX;
     int error;
 
     COVERAGE_INC(dpif_port_add);
@@ -433,12 +440,12 @@ dpif_port_add(struct dpif *dpif, struct netdev *netdev, uint16_t *port_nop)
 
     error = dpif->dpif_class->port_add(dpif, netdev, &port_no);
     if (!error) {
-        VLOG_DBG_RL(&dpmsg_rl, "%s: added %s as port %"PRIu16,
+        VLOG_DBG_RL(&dpmsg_rl, "%s: added %s as port %"PRIu32,
                     dpif_name(dpif), netdev_name, port_no);
     } else {
         VLOG_WARN_RL(&error_rl, "%s: failed to add %s as port: %s",
                      dpif_name(dpif), netdev_name, strerror(error));
-        port_no = UINT16_MAX;
+        port_no = UINT32_MAX;
     }
     if (port_nop) {
         *port_nop = port_no;
@@ -449,7 +456,7 @@ dpif_port_add(struct dpif *dpif, struct netdev *netdev, uint16_t *port_nop)
 /* Attempts to remove 'dpif''s port number 'port_no'.  Returns 0 if successful,
  * otherwise a positive errno value. */
 int
-dpif_port_del(struct dpif *dpif, uint16_t port_no)
+dpif_port_del(struct dpif *dpif, uint32_t port_no)
 {
     int error;
 
@@ -457,7 +464,7 @@ dpif_port_del(struct dpif *dpif, uint16_t port_no)
 
     error = dpif->dpif_class->port_del(dpif, port_no);
     if (!error) {
-        VLOG_DBG_RL(&dpmsg_rl, "%s: port_del(%"PRIu16")",
+        VLOG_DBG_RL(&dpmsg_rl, "%s: port_del(%"PRIu32")",
                     dpif_name(dpif), port_no);
     } else {
         log_operation(dpif, "port_del", error);
@@ -486,6 +493,20 @@ dpif_port_destroy(struct dpif_port *dpif_port)
     free(dpif_port->type);
 }
 
+/* Checks if port named 'devname' exists in 'dpif'.  If so, returns
+ * true; otherwise, returns false. */
+bool
+dpif_port_exists(const struct dpif *dpif, const char *devname)
+{
+    int error = dpif->dpif_class->port_query_by_name(dpif, devname, NULL);
+    if (error != 0 && error != ENODEV) {
+        VLOG_WARN_RL(&error_rl, "%s: failed to query port %s: %s",
+                     dpif_name(dpif), devname, strerror(error));
+    }
+
+    return !error;
+}
+
 /* Looks up port number 'port_no' in 'dpif'.  On success, returns 0 and
  * initializes '*port' appropriately; on failure, returns a positive errno
  * value.
@@ -493,16 +514,16 @@ dpif_port_destroy(struct dpif_port *dpif_port)
  * The caller owns the data in 'port' and must free it with
  * dpif_port_destroy() when it is no longer needed. */
 int
-dpif_port_query_by_number(const struct dpif *dpif, uint16_t port_no,
+dpif_port_query_by_number(const struct dpif *dpif, uint32_t port_no,
                           struct dpif_port *port)
 {
     int error = dpif->dpif_class->port_query_by_number(dpif, port_no, port);
     if (!error) {
-        VLOG_DBG_RL(&dpmsg_rl, "%s: port %"PRIu16" is device %s",
+        VLOG_DBG_RL(&dpmsg_rl, "%s: port %"PRIu32" is device %s",
                     dpif_name(dpif), port_no, port->name);
     } else {
         memset(port, 0, sizeof *port);
-        VLOG_WARN_RL(&error_rl, "%s: failed to query port %"PRIu16": %s",
+        VLOG_WARN_RL(&error_rl, "%s: failed to query port %"PRIu32": %s",
                      dpif_name(dpif), port_no, strerror(error));
     }
     return error;
@@ -520,7 +541,7 @@ dpif_port_query_by_name(const struct dpif *dpif, const char *devname,
 {
     int error = dpif->dpif_class->port_query_by_name(dpif, devname, port);
     if (!error) {
-        VLOG_DBG_RL(&dpmsg_rl, "%s: device %s is on port %"PRIu16,
+        VLOG_DBG_RL(&dpmsg_rl, "%s: device %s is on port %"PRIu32,
                     dpif_name(dpif), devname, port->port_no);
     } else {
         memset(port, 0, sizeof *port);
@@ -549,7 +570,7 @@ dpif_get_max_ports(const struct dpif *dpif)
  * as the OVS_USERSPACE_ATTR_PID attribute's value, for use in flows whose
  * packets arrived on port 'port_no'.
  *
- * A 'port_no' of UINT16_MAX is a special case: it returns a reserved PID, not
+ * A 'port_no' of UINT32_MAX is a special case: it returns a reserved PID, not
  * allocated to any port, that the client may use for special purposes.
  *
  * The return value is only meaningful when DPIF_UC_ACTION has been enabled in
@@ -558,7 +579,7 @@ dpif_get_max_ports(const struct dpif *dpif)
  * update all of the flows that it installed that contain
  * OVS_ACTION_ATTR_USERSPACE actions. */
 uint32_t
-dpif_port_get_pid(const struct dpif *dpif, uint16_t port_no)
+dpif_port_get_pid(const struct dpif *dpif, uint32_t port_no)
 {
     return (dpif->dpif_class->port_get_pid
             ? (dpif->dpif_class->port_get_pid)(dpif, port_no)
@@ -570,7 +591,7 @@ dpif_port_get_pid(const struct dpif *dpif, uint16_t port_no)
  * result is null-terminated.  On failure, returns a positive errno value and
  * makes 'name' the empty string. */
 int
-dpif_port_get_name(struct dpif *dpif, uint16_t port_no,
+dpif_port_get_name(struct dpif *dpif, uint32_t port_no,
                    char *name, size_t name_size)
 {
     struct dpif_port port;

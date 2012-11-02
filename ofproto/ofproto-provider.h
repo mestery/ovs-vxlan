@@ -27,12 +27,12 @@
 #include "ofp-errors.h"
 #include "ofp-util.h"
 #include "shash.h"
+#include "simap.h"
 #include "timeval.h"
 
 struct match;
 struct ofpact;
 struct ofputil_flow_mod;
-struct simap;
 
 /* An OpenFlow switch.
  *
@@ -62,6 +62,9 @@ struct ofproto {
     /* Datapath. */
     struct hmap ports;          /* Contains "struct ofport"s. */
     struct shash port_by_name;
+    unsigned long *ofp_port_ids;/* Bitmap of used OpenFlow port numbers. */
+    struct simap ofp_requests;  /* OpenFlow port number requests. */
+    uint16_t alloc_port_no;     /* Last allocated OpenFlow port number. */
     uint16_t max_ports;         /* Max possible OpenFlow port num, plus one. */
 
     /* Flow tables. */
@@ -320,6 +323,16 @@ struct ofproto_class {
 /* ## Factory Functions ## */
 /* ## ----------------- ## */
 
+    /* Initializes provider.  The caller may pass in 'iface_hints',
+     * which contains an shash of "struct iface_hint" elements indexed
+     * by the interface's name.  The provider may use these hints to
+     * describe the startup configuration in order to reinitialize its
+     * state.  The caller owns the provided data, so a provider must
+     * make copies of anything required.  An ofproto provider must
+     * remove any existing state that is not described by the hint, and
+     * may choose to remove it all. */
+    void (*init)(const struct shash *iface_hints);
+
     /* Enumerates the types of all support ofproto types into 'types'.  The
      * caller has already initialized 'types' and other ofproto classes might
      * already have added names to it. */
@@ -345,6 +358,37 @@ struct ofproto_class {
      * Returns 0 if successful, otherwise a positive errno value.
      */
     int (*del)(const char *type, const char *name);
+
+/* ## ------------------------ ## */
+/* ## Top-Level type Functions ## */
+/* ## ------------------------ ## */
+
+    /* Performs any periodic activity required on ofprotos of type
+     * 'type'.
+     *
+     * An ofproto provider may implement it or not, depending on whether
+     * it needs type-level maintenance.
+     *
+     * Returns 0 if successful, otherwise a positive errno value. */
+    int (*type_run)(const char *type);
+
+    /* Performs periodic activity required on ofprotos of type 'type'
+     * that needs to be done with the least possible latency.
+     *
+     * This is run multiple times per main loop.  An ofproto provider may
+     * implement it or not, according to whether it provides a performance
+     * boost for that ofproto implementation.
+     *
+     * Returns 0 if successful, otherwise a positive errno value. */
+    int (*type_run_fast)(const char *type);
+
+    /* Causes the poll loop to wake up when a type 'type''s 'run'
+     * function needs to be called, e.g. by calling the timer or fd
+     * waiting functions in poll-loop.h.
+     *
+     * An ofproto provider may implement it or not, depending on whether
+     * it needs type-level maintenance. */
+    void (*type_wait)(const char *type);
 
 /* ## --------------------------- ## */
 /* ## Top-Level ofproto Functions ## */
@@ -526,6 +570,8 @@ struct ofproto_class {
     /* Life-cycle functions for a "struct ofport" (see "Life Cycle" above).
      *
      * ->port_construct() should not modify any base members of the ofport.
+     * An ofproto implementation should use the 'ofp_port' member of
+     * "struct ofport" as the OpenFlow port number.
      *
      * ofports are managed by the base ofproto code.  The ofproto
      * implementation should only create and destroy them in response to calls
@@ -584,14 +630,14 @@ struct ofproto_class {
                               const char *devname, struct ofproto_port *port);
 
     /* Attempts to add 'netdev' as a port on 'ofproto'.  Returns 0 if
-     * successful, otherwise a positive errno value.  If successful, sets
-     * '*ofp_portp' to the new port's port number.
+     * successful, otherwise a positive errno value.  The caller should
+     * inform the implementation of the OpenFlow port through the
+     * ->port_construct() method.
      *
      * It doesn't matter whether the new port will be returned by a later call
      * to ->port_poll(); the implementation may do whatever is more
      * convenient. */
-    int (*port_add)(struct ofproto *ofproto, struct netdev *netdev,
-                    uint16_t *ofp_portp);
+    int (*port_add)(struct ofproto *ofproto, struct netdev *netdev);
 
     /* Deletes port number 'ofp_port' from the datapath for 'ofproto'.  Returns
      * 0 if successful, otherwise a positive errno value.
@@ -609,11 +655,9 @@ struct ofproto_class {
      *
      * The client might not be entirely in control of the ports within an
      * ofproto.  Some hardware implementations, for example, might have a fixed
-     * set of ports in a datapath, and the Linux datapath allows the system
-     * administrator to externally add and remove ports with ovs-dpctl.  For
-     * this reason, the client needs a way to iterate through all the ports
-     * that are actually in a datapath.  These functions provide that
-     * functionality.
+     * set of ports in a datapath.  For this reason, the client needs a way to
+     * iterate through all the ports that are actually in a datapath.  These
+     * functions provide that functionality.
      *
      * The 'state' pointer provides the implementation a place to
      * keep track of its position.  Its format is opaque to the caller.

@@ -28,7 +28,7 @@ struct flow;
 struct ofproto_sflow_options;
 struct ofport;
 
-struct dpif_sflow *dpif_sflow_create(struct dpif *);
+struct dpif_sflow *dpif_sflow_create(void);
 uint32_t dpif_sflow_get_probability(const struct dpif_sflow *);
 
 void dpif_sflow_destroy(struct dpif_sflow *);
@@ -37,8 +37,9 @@ void dpif_sflow_set_options(struct dpif_sflow *,
 void dpif_sflow_clear(struct dpif_sflow *);
 bool dpif_sflow_is_enabled(const struct dpif_sflow *);
 
-void dpif_sflow_add_port(struct dpif_sflow *ds, struct ofport *ofport);
-void dpif_sflow_del_port(struct dpif_sflow *, uint16_t ovs_port);
+void dpif_sflow_add_port(struct dpif_sflow *ds, struct ofport *ofport,
+                         uint32_t odp_port);
+void dpif_sflow_del_port(struct dpif_sflow *, uint32_t odp_port);
 
 void dpif_sflow_run(struct dpif_sflow *);
 void dpif_sflow_wait(struct dpif_sflow *);
@@ -46,8 +47,9 @@ void dpif_sflow_wait(struct dpif_sflow *);
 void dpif_sflow_received(struct dpif_sflow *,
                          struct ofpbuf *,
                          const struct flow *,
+                         uint32_t odp_port,
                          const union user_action_cookie *);
 
-int dpif_sflow_odp_port_to_ifindex(const struct dpif_sflow *, uint16_t);
+int dpif_sflow_odp_port_to_ifindex(const struct dpif_sflow *, uint32_t);
 
 #endif /* ofproto/ofproto-dpif-sflow.h */

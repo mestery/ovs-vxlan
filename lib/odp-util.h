@@ -32,33 +32,7 @@ struct nlattr;
 struct ofpbuf;
 struct simap;
 
-#define OVSP_NONE UINT16_MAX
-
-static inline uint16_t
-ofp_port_to_odp_port(uint16_t ofp_port)
-{
-    switch (ofp_port) {
-    case OFPP_LOCAL:
-        return OVSP_LOCAL;
-    case OFPP_NONE:
-        return OVSP_NONE;
-    default:
-        return ofp_port;
-    }
-}
-
-static inline uint16_t
-odp_port_to_ofp_port(uint16_t odp_port)
-{
-    switch (odp_port) {
-    case OVSP_LOCAL:
-        return OFPP_LOCAL;
-    case OVSP_NONE:
-        return OFPP_NONE;
-    default:
-        return odp_port;
-    }
-}
+#define OVSP_NONE UINT32_MAX
 
 void format_odp_actions(struct ds *, const struct nlattr *odp_actions,
                         size_t actions_len);
@@ -110,7 +84,8 @@ void odp_flow_key_format(const struct nlattr *, size_t, struct ds *);
 int odp_flow_key_from_string(const char *s, const struct simap *port_names,
                              struct ofpbuf *);
 
-void odp_flow_key_from_flow(struct ofpbuf *, const struct flow *);
+void odp_flow_key_from_flow(struct ofpbuf *, const struct flow *,
+                            uint32_t odp_in_port);
 
 uint32_t odp_flow_key_hash(const struct nlattr *, size_t);
 
