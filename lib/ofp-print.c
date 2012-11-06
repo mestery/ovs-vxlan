@@ -617,6 +617,8 @@ ofp10_match_to_string(const struct ofp10_match *om, int verbosity)
             }
         } else if (om->dl_type == htons(ETH_TYPE_ARP)) {
             ds_put_cstr(&f, "arp,");
+        } else if (om->dl_type == htons(ETH_TYPE_RARP)){
+            ds_put_cstr(&f, "rarp,");
         } else {
             skip_type = false;
         }
@@ -642,7 +644,8 @@ ofp10_match_to_string(const struct ofp10_match *om, int verbosity)
                      (w & OFPFW10_NW_DST_MASK) >> OFPFW10_NW_DST_SHIFT,
                      verbosity);
     if (!skip_proto) {
-        if (om->dl_type == htons(ETH_TYPE_ARP)) {
+        if (om->dl_type == htons(ETH_TYPE_ARP) ||
+            om->dl_type == htons(ETH_TYPE_RARP)) {
             print_wild(&f, "arp_op=", w & OFPFW10_NW_PROTO, verbosity,
                        "%u", om->nw_proto);
         } else {
@@ -898,6 +901,23 @@ ofp_print_error(struct ds *string, enum ofperr error)
         ds_put_char(string, ' ');
     }
     ds_put_format(string, "***decode error: %s***\n", ofperr_get_name(error));
+}
+
+static void
+ofp_print_hello(struct ds *string, const struct ofp_header *oh)
+{
+    uint32_t allowed_versions;
+    bool ok;
+
+    ok = ofputil_decode_hello(oh, &allowed_versions);
+
+    ds_put_cstr(string, "\n version bitmap: ");
+    ofputil_format_version_bitmap(string, allowed_versions);
+
+    if (!ok) {
+        ds_put_cstr(string, "\n unknown data in hello:\n");
+        ds_put_hex_dump(string, oh, ntohs(oh->length), 0, true);
+    }
 }
 
 static void
@@ -1726,9 +1746,7 @@ ofp_to_string__(const struct ofp_header *oh, enum ofpraw raw,
     ofp_header_to_string__(oh, raw, string);
     switch (ofptype_from_ofpraw(raw)) {
     case OFPTYPE_HELLO:
-        ds_put_char(string, '\n');
-        ds_put_hex_dump(string, oh + 1, ntohs(oh->length) - sizeof *oh,
-                        0, true);
+        ofp_print_hello(string, oh);
         break;
 
     case OFPTYPE_ERROR:

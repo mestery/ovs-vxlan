@@ -52,6 +52,7 @@ v1.9.0 - xx xxx xxxx
       commands will now return information on that shared datapath.  To
       get the equivalent bridge-specific information, use the new
       "ovs-appctl dpif/*" commands.
+    - Tunnel header caching removed.
     - The following features are now deprecated.  They will be removed no
       earlier than February 2013.  Please email dev@openvswitch.org with
       concerns.
@@ -60,7 +61,9 @@ v1.9.0 - xx xxx xxxx
         - Interface type "null".
         - Numeric values for reserved ports (see "ovs-ofctl" note above).
         - Tunnel Path MTU Discovery.
-
+        - CAPWAP tunnel support.
+    - The data in the RARP packets can now be matched in the same way as the
+      data in ARP packets.
 
 v1.8.0 - xx xxx xxxx
 ------------------------

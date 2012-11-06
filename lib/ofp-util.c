@@ -16,6 +16,7 @@
 
 #include <config.h>
 #include "ofp-print.h"
+#include <ctype.h>
 #include <errno.h>
 #include <inttypes.h>
 #include <sys/types.h>
@@ -305,7 +306,7 @@ ofputil_match_from_ofp11_match(const struct ofp11_match *ofmatch,
     uint16_t wc = ntohl(ofmatch->wildcards);
     uint8_t dl_src_mask[ETH_ADDR_LEN];
     uint8_t dl_dst_mask[ETH_ADDR_LEN];
-    bool ipv4, arp;
+    bool ipv4, arp, rarp;
     int i;
 
     match_init_catchall(match);
@@ -370,6 +371,7 @@ ofputil_match_from_ofp11_match(const struct ofp11_match *ofmatch,
 
     ipv4 = match->flow.dl_type == htons(ETH_TYPE_IP);
     arp = match->flow.dl_type == htons(ETH_TYPE_ARP);
+    rarp = match->flow.dl_type == htons(ETH_TYPE_RARP);
 
     if (ipv4 && !(wc & OFPFW11_NW_TOS)) {
         if (ofmatch->nw_tos & ~IP_DSCP_MASK) {
@@ -380,7 +382,7 @@ ofputil_match_from_ofp11_match(const struct ofp11_match *ofmatch,
         match_set_nw_dscp(match, ofmatch->nw_tos);
     }
 
-    if (ipv4 || arp) {
+    if (ipv4 || arp || rarp) {
         if (!(wc & OFPFW11_NW_PROTO)) {
             match_set_nw_proto(match, ofmatch->nw_proto);
         }
@@ -845,6 +847,71 @@ ofputil_protocols_from_string(const char *s)
     return protocols;
 }
 
+static enum ofp_version
+ofputil_version_from_string(const char *s)
+{
+    if (!strcasecmp(s, "OpenFlow10")) {
+        return OFP10_VERSION;
+    }
+    if (!strcasecmp(s, "OpenFlow11")) {
+        return OFP11_VERSION;
+    }
+    if (!strcasecmp(s, "OpenFlow12")) {
+        return OFP12_VERSION;
+    }
+    VLOG_FATAL("Unknown OpenFlow version: \"%s\"", s);
+}
+
+static bool
+is_delimiter(char c)
+{
+    return isspace(c) || c == ',';
+}
+
+uint32_t
+ofputil_versions_from_string(const char *s)
+{
+    size_t i = 0;
+    uint32_t bitmap = 0;
+
+    while (s[i]) {
+        size_t j;
+        enum ofp_version version;
+        char *key;
+
+        if (is_delimiter(s[i])) {
+            i++;
+            continue;
+        }
+        j = 0;
+        while (s[i + j] && !is_delimiter(s[i + j])) {
+            j++;
+        }
+        key = xmemdup0(s + i, j);
+        version = ofputil_version_from_string(key);
+        free(key);
+        bitmap |= 1u << version;
+        i += j;
+    }
+
+    return bitmap;
+}
+
+const char *
+ofputil_version_to_string(enum ofp_version ofp_version)
+{
+    switch (ofp_version) {
+    case OFP10_VERSION:
+        return "OpenFlow10";
+    case OFP11_VERSION:
+        return "OpenFlow11";
+    case OFP12_VERSION:
+        return "OpenFlow12";
+    default:
+        NOT_REACHED();
+    }
+}
+
 bool
 ofputil_packet_in_format_is_valid(enum nx_packet_in_format packet_in_format)
 {
@@ -971,6 +1038,157 @@ ofputil_usable_protocols(const struct match *match)
 
     /* Other formats can express this rule. */
     return OFPUTIL_P_ANY;
+}
+
+void
+ofputil_format_version(struct ds *msg, enum ofp_version version)
+{
+    ds_put_format(msg, "0x%02x", version);
+}
+
+void
+ofputil_format_version_name(struct ds *msg, enum ofp_version version)
+{
+    ds_put_cstr(msg, ofputil_version_to_string(version));
+}
+
+static void
+ofputil_format_version_bitmap__(struct ds *msg, uint32_t bitmap,
+                                void (*format_version)(struct ds *msg,
+                                                       enum ofp_version))
+{
+    while (bitmap) {
+        format_version(msg, raw_ctz(bitmap));
+        bitmap = zero_rightmost_1bit(bitmap);
+        if (bitmap) {
+            ds_put_cstr(msg, ", ");
+        }
+    }
+}
+
+void
+ofputil_format_version_bitmap(struct ds *msg, uint32_t bitmap)
+{
+    ofputil_format_version_bitmap__(msg, bitmap, ofputil_format_version);
+}
+
+void
+ofputil_format_version_bitmap_names(struct ds *msg, uint32_t bitmap)
+{
+    ofputil_format_version_bitmap__(msg, bitmap, ofputil_format_version_name);
+}
+
+static bool
+ofputil_decode_hello_bitmap(const struct ofp_hello_elem_header *oheh,
+                            uint32_t *allowed_versions)
+{
+    uint16_t bitmap_len = ntohs(oheh->length) - sizeof *oheh;
+    const ovs_be32 *bitmap = (const ovs_be32 *) (oheh + 1);
+
+    if (!bitmap_len || bitmap_len % sizeof *bitmap) {
+        return false;
+    }
+
+    /* Only use the first 32-bit element of the bitmap as that is all the
+     * current implementation supports.  Subsequent elements are ignored which
+     * should have no effect on session negotiation until Open vSwtich supports
+     * wire-protocol versions greater than 31.
+     */
+    *allowed_versions = ntohl(bitmap[0]);
+
+    if (*allowed_versions & 1) {
+        /* There's no OpenFlow version 0. */
+        VLOG_WARN_RL(&bad_ofmsg_rl, "peer claims to support invalid OpenFlow "
+                     "version 0x00");
+        *allowed_versions &= ~1u;
+    }
+
+    if (!*allowed_versions) {
+        VLOG_WARN_RL(&bad_ofmsg_rl, "peer does not support any OpenFlow "
+                     "version (between 0x01 and 0x1f)");
+        return false;
+    }
+
+    return true;
+}
+
+static uint32_t
+version_bitmap_from_version(uint8_t ofp_version)
+{
+    return ((ofp_version < 32 ? 1u << ofp_version : 0) - 1) << 1;
+}
+
+/* Decodes OpenFlow OFPT_HELLO message 'oh', storing into '*allowed_versions'
+ * the set of OpenFlow versions for which 'oh' announces support.
+ *
+ * Because of how OpenFlow defines OFPT_HELLO messages, this function is always
+ * successful, and thus '*allowed_versions' is always initialized.  However, it
+ * returns false if 'oh' contains some data that could not be fully understood,
+ * true if 'oh' was completely parsed. */
+bool
+ofputil_decode_hello(const struct ofp_header *oh, uint32_t *allowed_versions)
+{
+    struct ofpbuf msg;
+    bool ok = true;
+
+    ofpbuf_use_const(&msg, oh, ntohs(oh->length));
+    ofpbuf_pull(&msg, sizeof *oh);
+
+    *allowed_versions = version_bitmap_from_version(oh->version);
+    while (msg.size) {
+        const struct ofp_hello_elem_header *oheh;
+        unsigned int len;
+
+        if (msg.size < sizeof *oheh) {
+            return false;
+        }
+
+        oheh = msg.data;
+        len = ntohs(oheh->length);
+        if (len < sizeof *oheh || !ofpbuf_try_pull(&msg, ROUND_UP(len, 8))) {
+            return false;
+        }
+
+        if (oheh->type != htons(OFPHET_VERSIONBITMAP)
+            || !ofputil_decode_hello_bitmap(oheh, allowed_versions)) {
+            ok = false;
+        }
+    }
+
+    return ok;
+}
+
+/* Returns true if 'allowed_versions' needs to be accompanied by a version
+ * bitmap to be correctly expressed in an OFPT_HELLO message. */
+static inline bool
+should_send_version_bitmap(uint32_t allowed_versions)
+{
+    return !is_pow2((allowed_versions >> 1) + 1);
+}
+
+/* Create an OFPT_HELLO message that expresses support for the OpenFlow
+ * versions in the 'allowed_versions' bitmaps and returns the message. */
+struct ofpbuf *
+ofputil_encode_hello(uint32_t allowed_versions)
+{
+    enum ofp_version ofp_version;
+    struct ofpbuf *msg;
+
+    ofp_version = leftmost_1bit_idx(allowed_versions);
+    msg = ofpraw_alloc(OFPRAW_OFPT_HELLO, ofp_version, 0);
+
+    if (should_send_version_bitmap(allowed_versions)) {
+        struct ofp_hello_elem_header *oheh;
+        uint16_t map_len;
+
+        map_len = sizeof(uint32_t) / CHAR_BIT;
+        oheh = ofpbuf_put_zeros(msg, ROUND_UP(map_len + sizeof *oheh, 8));
+        oheh->type = htons(OFPHET_VERSIONBITMAP);
+        oheh->length = htons(map_len + sizeof *oheh);
+        *(ovs_be32 *)(oheh + 1) = htonl(allowed_versions);
+    }
+
+    return msg;
 }
 
 /* Returns an OpenFlow message that, sent on an OpenFlow connection whose
@@ -2420,8 +2638,8 @@ ofputil_decode_ofp10_phy_port(struct ofputil_phy_port *pp,
     pp->supported = netdev_port_features_from_ofp10(opp->supported);
     pp->peer = netdev_port_features_from_ofp10(opp->peer);
 
-    pp->curr_speed = netdev_features_to_bps(pp->curr) / 1000;
-    pp->max_speed = netdev_features_to_bps(pp->supported) / 1000;
+    pp->curr_speed = netdev_features_to_bps(pp->curr, 0) / 1000;
+    pp->max_speed = netdev_features_to_bps(pp->supported, 0) / 1000;
 
     return 0;
 }
@@ -3789,7 +4007,8 @@ ofputil_normalize_match__(struct match *match, bool may_log)
                 may_match |= MAY_ND_TARGET | MAY_ARP_THA;
             }
         }
-    } else if (match->flow.dl_type == htons(ETH_TYPE_ARP)) {
+    } else if (match->flow.dl_type == htons(ETH_TYPE_ARP) ||
+               match->flow.dl_type == htons(ETH_TYPE_RARP)) {
         may_match = MAY_NW_PROTO | MAY_NW_ADDR | MAY_ARP_SHA | MAY_ARP_THA;
     } else {
         may_match = 0;

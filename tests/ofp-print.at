@@ -45,6 +45,7 @@ AT_SETUP([OFPT_HELLO - ordinary])
 AT_KEYWORDS([ofp-print])
 AT_CHECK([ovs-ofctl ofp-print 0100000800000000], [0], [dnl
 OFPT_HELLO (xid=0x0):
+ version bitmap: 0x01
 ])
 AT_CLEANUP
 
@@ -53,7 +54,33 @@ AT_KEYWORDS([ofp-print])
 AT_CHECK([ovs-ofctl ofp-print 0100001300000000657874726120646174610a], [0],
 [dnl
 OFPT_HELLO (xid=0x0):
-00000000  65 78 74 72 61 20 64 61-74 61 0a                |extra data.     |
+ version bitmap: 0x01
+ unknown data in hello:
+00000000  01 00 00 13 00 00 00 00-65 78 74 72 61 20 64 61 |........extra da|
+00000010  74 61 0a                                        |ta.             |
+])
+AT_CLEANUP
+
+AT_SETUP([OFPT_HELLO with version bitmap])
+AT_KEYWORDS([ofp-print])
+AT_CHECK([ovs-ofctl ofp-print "01 00 00 10 00 00 00 00 00 01 00 08 00 00 00 f0"], [0],
+[dnl
+OFPT_HELLO (xid=0x0):
+ version bitmap: 0x04, 0x05, 0x06, 0x07
+])
+AT_CLEANUP
+
+AT_SETUP([OFPT_HELLO with version bitmap and extra data])
+AT_KEYWORDS([ofp-print])
+AT_CHECK([ovs-ofctl ofp-print "\
+01 00 00 1b 00 00 00 00 ff ff 00 06 01 02 00 00 \
+00 01 00 08 00 00 00 f0 61 62 63"], [0],
+[dnl
+OFPT_HELLO (xid=0x0):
+ version bitmap: 0x04, 0x05, 0x06, 0x07
+ unknown data in hello:
+00000000  01 00 00 1b 00 00 00 00-ff ff 00 06 01 02 00 00 |................|
+00000010  00 01 00 08 00 00 00 f0-61 62 63                |........abc     |
 ])
 AT_CLEANUP
 
@@ -142,7 +169,7 @@ actions: OUTPUT SET_VLAN_VID SET_VLAN_PCP STRIP_VLAN SET_DL_SRC SET_DL_DST SET_N
  LOCAL(br0): addr:50:54:00:00:00:01
      config:     PORT_DOWN
      state:      LINK_DOWN
-     speed: 100 Mbps now, 100 Mbps max
+     speed: 0 Mbps now, 0 Mbps max
 ])
 AT_CLEANUP
 
@@ -351,7 +378,7 @@ AT_CHECK([ovs-ofctl ofp-print "\
 00 00 00 23 20 83 c1 5f 00 00 00 00 \
 "], [0], [dnl
 OFPT_PACKET_IN (OF1.2) (xid=0x0): total_len=42 in_port=LOCAL (via no_match) data_len=42 buffer=0xffffff00
-priority=0,metadata=0,in_port=0,vlan_tci=0x0000,dl_src=00:23:20:83:c1:5f,dl_dst=ff:ff:ff:ff:ff:ff,dl_type=0x8035
+priority=0,rarp,metadata=0,in_port=0,vlan_tci=0x0000,dl_src=00:23:20:83:c1:5f,dl_dst=ff:ff:ff:ff:ff:ff,arp_spa=0.0.0.0,arp_tpa=0.0.0.0,arp_op=3,arp_sha=00:23:20:83:c1:5f,arp_tha=00:23:20:83:c1:5f
 ])
 AT_CLEANUP
 

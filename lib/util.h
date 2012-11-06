@@ -96,22 +96,6 @@ is_pow2(uintmax_t x)
     return IS_POW2(x);
 }
 
-/* Returns the rightmost 1-bit in 'x' (e.g. 01011000 => 00001000), or 0 if 'x'
- * is 0. */
-static inline uintmax_t
-rightmost_1bit(uintmax_t x)
-{
-    return x & -x;
-}
-
-/* Returns 'x' with its rightmost 1-bit changed to a zero (e.g. 01011000 =>
- * 01010000), or 0 if 'x' is 0. */
-static inline uintmax_t
-zero_rightmost_1bit(uintmax_t x)
-{
-    return x & (x - 1);
-}
-
 #ifndef MIN
 #define MIN(X, Y) ((X) < (Y) ? (X) : (Y))
 #endif
@@ -242,6 +226,8 @@ char *xreadlink(const char *filename);
 char *follow_symlinks(const char *filename);
 
 void ignore(bool x OVS_UNUSED);
+
+/* Bitwise tests. */
 
 /* Returns the number of trailing 0-bits in 'n'.  Undefined if 'n' == 0.
  *
@@ -270,6 +256,43 @@ int log_2_floor(uint32_t);
 int log_2_ceil(uint32_t);
 int popcount(uint32_t);
 
+/* Returns the rightmost 1-bit in 'x' (e.g. 01011000 => 00001000), or 0 if 'x'
+ * is 0. */
+static inline uintmax_t
+rightmost_1bit(uintmax_t x)
+{
+    return x & -x;
+}
+
+/* Returns 'x' with its rightmost 1-bit changed to a zero (e.g. 01011000 =>
+ * 01010000), or 0 if 'x' is 0. */
+static inline uintmax_t
+zero_rightmost_1bit(uintmax_t x)
+{
+    return x & (x - 1);
+}
+
+/* Returns the index of the rightmost 1-bit in 'x' (e.g. 01011000 => 3), or 32
+ * if 'x' is 0.
+ *
+ * Unlike the other functions for rightmost 1-bits, this function only works
+ * with 32-bit integers. */
+static inline uint32_t
+rightmost_1bit_idx(uint32_t x)
+{
+    return x ? ctz(x) : 32;
+}
+
+/* Returns the index of the rightmost 1-bit in 'x' (e.g. 01011000 => 6), or 32
+ * if 'x' is 0.
+ *
+ * This function only works with 32-bit integers. */
+static inline uint32_t
+leftmost_1bit_idx(uint32_t x)
+{
+    return x ? log_2_floor(x) : 32;
+}
+
 bool is_all_zeros(const uint8_t *, size_t);
 bool is_all_ones(const uint8_t *, size_t);
 void bitwise_copy(const void *src, unsigned int src_len, unsigned int src_ofs,
