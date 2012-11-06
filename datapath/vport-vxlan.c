@@ -40,13 +40,15 @@ static __be16 get_src_port(const struct sk_buff *skb,
         return (__force __be16)OVS_CB(skb)->flow->hash | htons(32768);
 }
 
-static void vxlan_build_header(const struct vport *vport,
-			       const struct tnl_mutable_config *mutable,
-			       const struct ovs_key_ipv4_tunnel *tun_key,
-			       void *header)
+static struct sk_buff *vxlan_build_header(const struct vport *vport,
+					  const struct tnl_mutable_config *mutable,
+					  struct dst_entry *dst,
+					  struct sk_buff *skb,
+					  int tunnel_hlen)
 {
-	struct udphdr *udph = header;
+	struct udphdr *udph = udp_hdr(skb);
 	struct vxlanhdr *vxh = (struct vxlanhdr *)(udph + 1);
+	const struct ovs_key_ipv4_tunnel *tun_key = OVS_CB(skb)->tun_key;
 	__be64 out_key;
 
 	if (tun_key->ipv4_dst)
@@ -59,28 +61,6 @@ static void vxlan_build_header(const struct vport *vport,
 
 	vxh->vx_flags = htonl(VXLAN_FLAGS);
 	vxh->vx_vni = htonl(be64_to_cpu(out_key) << 8);
-}
-
-static struct sk_buff *vxlan_update_header(const struct vport *vport,
-					   const struct tnl_mutable_config *mutable,
-					   struct dst_entry *dst,
-					   struct sk_buff *skb, int tunnel_hlen)
-{
-	struct udphdr *udph = udp_hdr(skb);
-	struct vxlanhdr *vxh = (struct vxlanhdr *)(udph + 1);
-	const struct ovs_key_ipv4_tunnel *tun_key = OVS_CB(skb)->tun_key;
-	__be64 out_key;
-
-	if (tun_key->ipv4_dst)
-		out_key = tun_key->tun_id;
-	else
-		out_key = mutable->out_key;
-
-	if (mutable->flags & TNL_F_OUT_KEY_ACTION)
-		vxh->vx_vni = htonl(be64_to_cpu(out_key) << 8);
-
-	udph->source = get_src_port(skb, mutable);
-	udph->len = htons(skb->len - skb_transport_offset(skb));
 
 	/*
 	 * Allow our local IP stack to fragment the outer packet even if the
@@ -165,7 +145,6 @@ static const struct tnl_ops ovs_vxlan_tnl_ops = {
 	.dport		= htons(VXLAN_DST_PORT),
 	.hdr_len	= vxlan_hdr_len,
 	.build_header	= vxlan_build_header,
-	.update_header	= vxlan_update_header,
 };
 
 static const struct tnl_ops ovs_ipsec_vxlan_tnl_ops = {
@@ -175,7 +154,6 @@ static const struct tnl_ops ovs_ipsec_vxlan_tnl_ops = {
 	.dport		= htons(VXLAN_DST_PORT),
 	.hdr_len	= vxlan_hdr_len,
 	.build_header	= vxlan_build_header,
-	.update_header	= vxlan_update_header,
 };
 
 /* Random value.  Irrelevant as long as it's not 0 since we set the handler. */
