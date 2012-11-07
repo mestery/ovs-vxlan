@@ -181,6 +181,7 @@ netdev_vport_get_netdev_type(const struct dpif_linux_vport *vport)
         return (nl_attr_get_u32(a[OVS_TUNNEL_ATTR_FLAGS]) & TNL_F_IPSEC
                 ? "ipsec_vxlan" : "vxlan");
 
+    case OVS_VPORT_TYPE_FT_GRE:
     case __OVS_VPORT_TYPE_MAX:
         break;
     }
