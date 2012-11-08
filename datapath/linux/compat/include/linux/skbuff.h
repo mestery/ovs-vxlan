@@ -252,18 +252,4 @@ static inline void skb_reset_mac_len(struct sk_buff *skb)
 }
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,29)
-#ifdef CONFIG_XFRM
-static inline struct sec_path *skb_sec_path(struct sk_buff *skb)
-{
-	return skb->sp;
-}
-#else
-static inline struct sec_path *skb_sec_path(struct sk_buff *skb)
-{
-	return NULL;
-}
-#endif
-#endif
-
 #endif
