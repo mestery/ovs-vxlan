@@ -268,7 +268,7 @@ class IPsec:
         self.sad_flush()
         self.spd_flush()
         self.racoon = Racoon()
-        self.entries = {}
+        self.entries = []
 
     def call_setkey(self, cmds):
         try:
