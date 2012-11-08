@@ -45,39 +45,14 @@ struct gre_base_hdr {
 	__be16 protocol;
 };
 
-static void get_gre_param(const struct tnl_mutable_config *mutable,
-			const struct ovs_key_ipv4_tunnel *tun_key,
-			u32 *flags, u32 *tunnel_type, __be64 *out_key)
-{
-	if (tun_key->ipv4_dst) {
-		*flags = 0;
-
-		if (tun_key->tun_flags & OVS_FLOW_TNL_F_KEY)
-			*flags = TNL_F_OUT_KEY_ACTION;
-		if (tun_key->tun_flags & OVS_FLOW_TNL_F_CSUM)
-			*flags |= TNL_F_CSUM;
-		*tunnel_type = TNL_T_PROTO_GRE;
-		*out_key = tun_key->tun_id;
-	} else {
-		*flags = mutable->flags;
-		*tunnel_type = mutable->key.tunnel_type;
-		if (mutable->flags & TNL_F_OUT_KEY_ACTION)
-			*out_key = tun_key->tun_id;
-		else
-			*out_key = mutable->out_key;
-
-	}
-}
-
 static int gre_hdr_len(const struct tnl_mutable_config *mutable,
 		       const struct ovs_key_ipv4_tunnel *tun_key)
 {
 	int len;
 	u32 flags;
-	u32 tunnel_type;
 	__be64 out_key;
 
-	get_gre_param(mutable, tun_key, &flags, &tunnel_type, &out_key);
+	tnl_get_param(mutable, tun_key, &flags, &out_key);
 	len = GRE_HEADER_SECTION;
 
 	if (flags & TNL_F_CSUM)
@@ -85,11 +60,11 @@ static int gre_hdr_len(const struct tnl_mutable_config *mutable,
 
 	/* Set key for GRE64 tunnels, even when key if is zero. */
 	if (out_key ||
-	    tunnel_type & TNL_T_PROTO_GRE64 ||
+	    mutable->key.tunnel_type & TNL_T_PROTO_GRE64 ||
 	    flags & TNL_F_OUT_KEY_ACTION) {
 
 		len += GRE_HEADER_SECTION;
-		if (tunnel_type & TNL_T_PROTO_GRE64)
+		if (mutable->key.tunnel_type & TNL_T_PROTO_GRE64)
 			len += GRE_HEADER_SECTION;
 	}
 	return len;
@@ -122,22 +97,22 @@ static struct sk_buff *gre_build_header(const struct vport *vport,
 					 int tunnel_hlen)
 {
 	u32 flags;
-	u32 tunnel_type;
 	__be64 out_key;
 	const struct ovs_key_ipv4_tunnel *tun_key = OVS_CB(skb)->tun_key;
 	__be32 *options = (__be32 *)(skb_network_header(skb) + tunnel_hlen
 					       - GRE_HEADER_SECTION);
 	struct gre_base_hdr *greh = (struct gre_base_hdr *) skb_transport_header(skb);
 
-	get_gre_param(mutable, tun_key, &flags, &tunnel_type, &out_key);
+	tnl_get_param(mutable, tun_key, &flags, &out_key);
 
 	greh->protocol = htons(ETH_P_TEB);
 	greh->flags = 0;
 
 	/* Work backwards over the options so the checksum is last. */
-	if (out_key || flags & TNL_F_OUT_KEY_ACTION || tunnel_type & TNL_T_PROTO_GRE64) {
+	if (out_key || flags & TNL_F_OUT_KEY_ACTION ||
+	    mutable->key.tunnel_type & TNL_T_PROTO_GRE64) {
 		greh->flags |= GRE_KEY;
-		if (tunnel_type & TNL_T_PROTO_GRE64) {
+		if (mutable->key.tunnel_type & TNL_T_PROTO_GRE64) {
 			/* Set higher 32 bits to seq. */
 			*options = be64_get_high32(out_key);
 			options--;
@@ -378,19 +353,20 @@ static bool check_checksum(struct sk_buff *skb)
 }
 
 static u32 gre_flags_to_tunnel_flags(const struct tnl_mutable_config *mutable,
-				     __be16 gre_flags)
+				     __be16 gre_flags, __be64 *key)
 {
 	u32 tunnel_flags = 0;
 
 	if (gre_flags & GRE_KEY) {
-		if (mutable->key.daddr && (mutable->flags & TNL_F_IN_KEY_MATCH))
-			tunnel_flags = OVS_FLOW_TNL_F_KEY;
-		else if (!mutable->key.daddr)
-			tunnel_flags = OVS_FLOW_TNL_F_KEY;
+		if (mutable->flags & TNL_F_IN_KEY_MATCH ||
+		    !mutable->key.daddr)
+			tunnel_flags = OVS_TNL_F_KEY;
+		else
+			*key = 0;
 	}
 
 	if (gre_flags & GRE_CSUM)
-		tunnel_flags |= OVS_FLOW_TNL_F_CSUM;
+		tunnel_flags |= OVS_TNL_F_CSUM;
 
 	return tunnel_flags;
 }
@@ -403,7 +379,8 @@ static int gre_rcv(struct sk_buff *skb)
 	int hdr_len;
 	struct iphdr *iph;
 	struct ovs_key_ipv4_tunnel tun_key;
-	__be16 flags;
+	__be16 gre_flags;
+	u32 tnl_flags;
 	__be64 key;
 	u32 tunnel_type;
 
@@ -412,7 +389,7 @@ static int gre_rcv(struct sk_buff *skb)
 	if (unlikely(!check_checksum(skb)))
 		goto error;
 
-	hdr_len = parse_header(ip_hdr(skb), &flags, &key, &tunnel_type);
+	hdr_len = parse_header(ip_hdr(skb), &gre_flags, &key, &tunnel_type);
 	if (unlikely(hdr_len < 0))
 		goto error;
 
@@ -427,7 +404,8 @@ static int gre_rcv(struct sk_buff *skb)
 		goto error;
 	}
 
-	tnl_tun_key_init(&tun_key, iph, key, gre_flags_to_tunnel_flags(mutable, flags));
+	tnl_flags = gre_flags_to_tunnel_flags(mutable, gre_flags, &key);
+	tnl_tun_key_init(&tun_key, iph, key, tnl_flags);
 	OVS_CB(skb)->tun_key = &tun_key;
 
 	__skb_pull(skb, hdr_len);
