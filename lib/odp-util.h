@@ -64,7 +64,6 @@ int odp_actions_from_string(const char *, const struct simap *port_names,
  *  OVS_KEY_ATTR_IPV6         40    --     4     44
  *  OVS_KEY_ATTR_ICMPV6        2     2     4      8
  *  OVS_KEY_ATTR_ND           28    --     4     32
- *  OVS_KEY_ATTR_TUNNEL       20    --     4     24
  *  -------------------------------------------------
  *  total                                       184
  *

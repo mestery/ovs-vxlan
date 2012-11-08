@@ -20,6 +20,7 @@
 #include <net/icmp.h>
 #include <net/ip.h>
 #include <net/xfrm.h>
+#include <net/udp.h>
 
 #include "datapath.h"
 #include "tunnel.h"
@@ -31,13 +32,13 @@ static struct socket *vxlan_rcv_socket;
 static int vxlan_n_tunnels;
 
 static __be16 get_src_port(const struct sk_buff *skb,
-                           const struct tnl_mutable_config *mutable)
+			   const struct tnl_mutable_config *mutable)
 {
-        if (mutable->flags & TNL_F_IPSEC)
-                return htons(VXLAN_IPSEC_SRC_PORT);
+	if (mutable->flags & TNL_F_IPSEC)
+		return htons(VXLAN_IPSEC_SRC_PORT);
 
-        /* Convert hash into a port between 32768 and 65535. */
-        return (__force __be16)OVS_CB(skb)->flow->hash | htons(32768);
+	/* Convert hash into a port between 32768 and 65535. */
+	return (__force __be16)OVS_CB(skb)->flow->hash | htons(32768);
 }
 
 static struct sk_buff *vxlan_build_header(const struct vport *vport,
@@ -57,7 +58,9 @@ static struct sk_buff *vxlan_build_header(const struct vport *vport,
 		out_key = mutable->out_key;
 
 	udph->dest = htons(VXLAN_DST_PORT);
+	udph->source = get_src_port(skb, mutable);
 	udph->check = 0;
+	udph->len = htons(skb->len - skb_transport_offset(skb));
 
 	vxh->vx_flags = htonl(VXLAN_FLAGS);
 	vxh->vx_vni = htonl(be64_to_cpu(out_key) << 8);
@@ -74,21 +77,6 @@ static struct sk_buff *vxlan_build_header(const struct vport *vport,
 	return skb;
 }
 
-static bool sec_path_esp(struct sk_buff *skb)
-{
-	struct sec_path *sp = skb_sec_path(skb);
-
-	if (sp) {
-		int i;
-
-		for (i = 0; i < sp->len; i++)
-			if (sp->xvec[i]->id.proto == XFRM_PROTO_ESP)
-				return true;
-	}
-
-	return false;
-}
-
 /* Called with rcu_read_lock and BH disabled. */
 static int vxlan_rcv(struct sock *sk, struct sk_buff *skb)
 {
@@ -99,6 +87,8 @@ static int vxlan_rcv(struct sock *sk, struct sk_buff *skb)
 	struct ovs_key_ipv4_tunnel tun_key;
 	int tunnel_type;
 	__be64 key;
+	u32 tunnel_flags = 0;
+
 
 	if (unlikely(!pskb_may_pull(skb, VXLAN_HLEN + ETH_HLEN)))
 		goto error;
@@ -109,12 +99,11 @@ static int vxlan_rcv(struct sock *sk, struct sk_buff *skb)
 		goto error;
 
 	__skb_pull(skb, VXLAN_HLEN);
+	skb_postpull_rcsum(skb, skb_transport_header(skb), VXLAN_HLEN + ETH_HLEN);
 
 	key = cpu_to_be64(ntohl(vxh->vx_vni) >> 8);
 
 	tunnel_type = TNL_T_PROTO_VXLAN;
-	if (sec_path_esp(skb))
-		tunnel_type |= TNL_T_IPSEC;
 
 	iph = ip_hdr(skb);
 	vport = ovs_tnl_find_port(dev_net(skb->dev), iph->daddr, iph->saddr,
@@ -124,10 +113,13 @@ static int vxlan_rcv(struct sock *sk, struct sk_buff *skb)
 		goto error;
 	}
 
-	skb_postpull_rcsum(skb, skb_transport_header(skb), VXLAN_HLEN + ETH_HLEN);
+	if (mutable->key.daddr && (mutable->flags & TNL_F_IN_KEY_MATCH))
+		tunnel_flags = OVS_FLOW_TNL_F_KEY;
+	else if (!mutable->key.daddr)
+		tunnel_flags = OVS_FLOW_TNL_F_KEY;
 
 	/* Save outer tunnel values */
-	tnl_tun_key_init(&tun_key, iph, key, OVS_FLOW_TNL_F_KEY);
+	tnl_tun_key_init(&tun_key, iph, key, tunnel_flags);
 	OVS_CB(skb)->tun_key = &tun_key;
 
 	ovs_tnl_rcv(vport, skb);
@@ -142,16 +134,13 @@ out:
 static const struct tnl_ops ovs_vxlan_tnl_ops = {
 	.tunnel_type	= TNL_T_PROTO_VXLAN,
 	.ipproto	= IPPROTO_UDP,
-	.dport		= htons(VXLAN_DST_PORT),
 	.hdr_len	= vxlan_hdr_len,
 	.build_header	= vxlan_build_header,
 };
 
 static const struct tnl_ops ovs_ipsec_vxlan_tnl_ops = {
-	.tunnel_type	= TNL_T_PROTO_VXLAN | TNL_T_IPSEC,
+	.tunnel_type	= TNL_T_PROTO_VXLAN,
 	.ipproto	= IPPROTO_UDP,
-	.sport		= htons(VXLAN_IPSEC_SRC_PORT),
-	.dport		= htons(VXLAN_DST_PORT),
 	.hdr_len	= vxlan_hdr_len,
 	.build_header	= vxlan_build_header,
 };
@@ -182,6 +171,8 @@ static int vxlan_init(void)
 	udp_sk(vxlan_rcv_socket->sk)->encap_type = UDP_ENCAP_VXLAN;
 	udp_sk(vxlan_rcv_socket->sk)->encap_rcv = vxlan_rcv;
 
+	udp_encap_enable();
+
 	return 0;
 
 error_sock:
@@ -200,39 +191,21 @@ static void vxlan_uninit(void)
 
 static struct vport *vxlan_create(const struct vport_parms *parms)
 {
-	struct nlattr *flags_nlattr;
-	struct vport *vport;
-	int error;
-
-	error = vxlan_init();
-	if (error)
-		return ERR_PTR(error);
-
-	flags_nlattr = nla_find_nested(parms->options, OVS_TUNNEL_ATTR_FLAGS);
-	if (!flags_nlattr || nla_len(flags_nlattr) != sizeof(u32))
-		return ERR_PTR(-EINVAL);
-
-	if (nla_get_u32(flags_nlattr) & TNL_F_IPSEC)
-	    vport = ovs_tnl_create(parms, &ovs_vxlan_vport_ops, &ovs_ipsec_vxlan_tnl_ops);
-	else
-	    vport = ovs_tnl_create(parms, &ovs_vxlan_vport_ops, &ovs_vxlan_tnl_ops);
-
-	if (IS_ERR(vport))
-		vxlan_uninit();
-	return vport;
+	return ovs_tnl_create(parms, &ovs_vxlan_vport_ops, &ovs_vxlan_tnl_ops);
 }
 
-static void vxlan_destroy(struct vport *vport)
+static void vxlan_exit(void)
 {
 	vxlan_uninit();
-	return ovs_tnl_destroy(vport);
 }
 
 const struct vport_ops ovs_vxlan_vport_ops = {
 	.type		= OVS_VPORT_TYPE_VXLAN,
 	.flags		= VPORT_F_TUN_ID,
+	.init		= vxlan_init,
+	.exit		= vxlan_exit,
 	.create		= vxlan_create,
-	.destroy	= vxlan_destroy,
+	.destroy	= ovs_tnl_destroy,
 	.set_addr	= ovs_tnl_set_addr,
 	.get_name	= ovs_tnl_get_name,
 	.get_addr	= ovs_tnl_get_addr,

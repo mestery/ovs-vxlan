@@ -374,8 +374,6 @@ out:
 static const struct tnl_ops capwap_tnl_ops = {
 	.tunnel_type	= TNL_T_PROTO_CAPWAP,
 	.ipproto	= IPPROTO_UDP,
-	.sport		= htons(CAPWAP_SRC_PORT),
-	.dport		= htons(CAPWAP_DST_PORT),
 	.hdr_len	= capwap_hdr_len,
 	.build_header	= capwap_build_header,
 };
