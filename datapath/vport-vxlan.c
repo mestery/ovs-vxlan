@@ -137,10 +137,10 @@ static int vxlan_rcv(struct sock *sk, struct sk_buff *skb)
 		goto error;
 	}
 
-	if (mutable->key.daddr && (mutable->flags & TNL_F_IN_KEY_MATCH))
-		tunnel_flags = OVS_FLOW_TNL_F_KEY;
-	else if (!mutable->key.daddr)
-		tunnel_flags = OVS_FLOW_TNL_F_KEY;
+	if (mutable->flags & TNL_F_IN_KEY_MATCH || !mutable->key.daddr)
+		tunnel_flags = OVS_TNL_F_KEY;
+	else
+		key = 0;
 
 	/* Save outer tunnel values */
 	tnl_tun_key_init(&tun_key, iph, key, tunnel_flags);
