@@ -15,21 +15,46 @@
 #include <linux/ip.h>
 #include <linux/net.h>
 #include <linux/udp.h>
-#include <linux/xfrm.h>
 
 #include <net/icmp.h>
 #include <net/ip.h>
-#include <net/xfrm.h>
 #include <net/udp.h>
 
 #include "datapath.h"
 #include "tunnel.h"
 #include "vport.h"
 #include "vport-generic.h"
-#include "vport-vxlan.h"
+
+#define VXLAN_DST_PORT 4341
+#define VXLAN_IPSEC_SRC_PORT 4564
+
+#define VXLAN_FLAGS 0x08000000  /* struct vxlanhdr.vx_flags required value. */
+
+/**
+ * struct vxlanhdr - VXLAN header
+ * @vx_flags: Must have the exact value %VXLAN_FLAGS.
+ * @vx_vni: VXLAN Network Identifier (VNI) in top 24 bits, low 8 bits zeroed.
+ */
+struct vxlanhdr {
+	__be32 vx_flags;
+	__be32 vx_vni;
+};
+
+#define VXLAN_HLEN (sizeof(struct udphdr) + sizeof(struct vxlanhdr))
+
+static inline int vxlan_hdr_len(const struct tnl_mutable_config *mutable,
+				const struct ovs_key_ipv4_tunnel *tun_key)
+{
+	return VXLAN_HLEN;
+}
 
 static struct socket *vxlan_rcv_socket;
 static int vxlan_n_tunnels;
+
+static inline struct vxlanhdr *vxlan_hdr(const struct sk_buff *skb)
+{
+	return (struct vxlanhdr *)(udp_hdr(skb) + 1);
+}
 
 static __be16 get_src_port(const struct sk_buff *skb,
 			   const struct tnl_mutable_config *mutable)
@@ -88,7 +113,6 @@ static int vxlan_rcv(struct sock *sk, struct sk_buff *skb)
 	int tunnel_type;
 	__be64 key;
 	u32 tunnel_flags = 0;
-
 
 	if (unlikely(!pskb_may_pull(skb, VXLAN_HLEN + ETH_HLEN)))
 		goto error;

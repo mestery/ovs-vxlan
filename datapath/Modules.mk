@@ -42,8 +42,7 @@ openvswitch_headers = \
 	vport-capwap.h \
 	vport-generic.h \
 	vport-internal_dev.h \
-	vport-netdev.h \
-	vport-vxlan.h
+	vport-netdev.h
 
 openvswitch_extras = \
 	README \
