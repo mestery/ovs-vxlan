@@ -25,7 +25,7 @@
 #include "vport.h"
 #include "vport-generic.h"
 
-#define VXLAN_DST_PORT 4341
+#define VXLAN_DST_PORT 8472
 #define VXLAN_IPSEC_SRC_PORT 4564
 
 #define VXLAN_FLAGS 0x08000000  /* struct vxlanhdr.vx_flags required value. */
