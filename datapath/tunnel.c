@@ -1247,7 +1247,7 @@ int ovs_tnl_get_options(const struct vport *vport, struct sk_buff *skb)
 	if (mutable->ttl && nla_put_u8(skb, OVS_TUNNEL_ATTR_TTL, mutable->ttl))
 		goto nla_put_failure;
 	if (mutable->dst_port && nla_put_u16(skb, OVS_TUNNEL_ATTR_DST_PORT,
-        				     mutable->dst_port))
+					     mutable->dst_port))
 		goto nla_put_failure;
 
 	return 0;
