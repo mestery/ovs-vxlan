@@ -592,6 +592,7 @@ parse_tunnel_config(const char *name, const char *type,
                     const struct smap *args, struct ofpbuf *options)
 {
     bool is_gre = false;
+    bool is_vxlan = false;
     bool is_ipsec = false;
     struct smap_node *node;
     bool ipsec_mech_set = false;
@@ -610,6 +611,8 @@ parse_tunnel_config(const char *name, const char *type,
         is_gre = true;
         is_ipsec = true;
         flags |= TNL_F_IPSEC;
+    } else if (!strcmp(type, "vxlan") || !strcmp(type, "ipsec_vxlan")) {
+        is_vxlan = true;
     }
 
     SMAP_FOR_EACH (node, args) {
@@ -646,6 +649,8 @@ parse_tunnel_config(const char *name, const char *type,
             } else {
                 nl_msg_put_u8(options, OVS_TUNNEL_ATTR_TTL, atoi(node->value));
             }
+        } else if (!strcmp(node->key, "dst_port") && is_vxlan) {
+            nl_msg_put_u16(options, OVS_TUNNEL_ATTR_DST_PORT, atoi(node->value));
         } else if (!strcmp(node->key, "csum") && is_gre) {
             if (!strcmp(node->value, "true")) {
                 flags |= TNL_F_CSUM;
@@ -764,6 +769,7 @@ tnl_port_config_from_nlattr(const struct nlattr *options, size_t options_len,
         [OVS_TUNNEL_ATTR_OUT_KEY] = { .type = NL_A_BE64, .optional = true },
         [OVS_TUNNEL_ATTR_TOS] = { .type = NL_A_U8, .optional = true },
         [OVS_TUNNEL_ATTR_TTL] = { .type = NL_A_U8, .optional = true },
+        [OVS_TUNNEL_ATTR_DST_PORT] = { .type = NL_A_U16, .optional = true },
     };
     struct ofpbuf buf;
 
@@ -841,6 +847,11 @@ unparse_tunnel_config(const char *name OVS_UNUSED, const char *type OVS_UNUSED,
     } else if (a[OVS_TUNNEL_ATTR_TOS]) {
         int tos = nl_attr_get_u8(a[OVS_TUNNEL_ATTR_TOS]);
         smap_add_format(args, "tos", "0x%x", tos);
+    }
+
+    if (a[OVS_TUNNEL_ATTR_DST_PORT]) {
+        ovs_be16 dst_port = nl_attr_get_be16(a[OVS_TUNNEL_ATTR_DST_PORT]);
+        smap_add_format(args, "dst_port", "%d", dst_port);
     }
 
     if (flags & TNL_F_CSUM) {
