@@ -123,7 +123,7 @@ static struct vxlan_if *vxlan_if_by_name(struct net *net, const char *name)
 
 	hlist_for_each_entry(vxlan_if, node, bucket, hash_node) {
 		if (!strcmp(vxlan_if->ifname, name))
-        		return vxlan_if;
+			return vxlan_if;
 	}
 
 	return NULL;
@@ -298,7 +298,7 @@ static int vxlan_tunnel_setup(struct net *net, const char *linkname,
 		dst_port = VXLAN_DST_PORT;
 
 	/* Verify if we already have a socket created for this port */
-        vxlan_port = vxlan_port_exists(net, dst_port);
+	vxlan_port = vxlan_port_exists(net, dst_port);
 	if (vxlan_port) {
 		vxlan_port->count++;
 		err = 0;
@@ -309,7 +309,7 @@ static int vxlan_tunnel_setup(struct net *net, const char *linkname,
 	vxlan_port = kmalloc(sizeof(struct vxlan_port), GFP_KERNEL);
 	if (!vxlan_port) {
 		err = -ENOMEM;
-        	goto out;
+		goto out;
 	}
 	memset (vxlan_port, 0, sizeof(struct vxlan_port));
 
