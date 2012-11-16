@@ -134,14 +134,27 @@ static inline struct vxlanhdr *vxlan_hdr(const struct sk_buff *skb)
 	return (struct vxlanhdr *)(udp_hdr(skb) + 1);
 }
 
-static __be16 get_src_port(const struct sk_buff *skb,
-			   const struct tnl_mutable_config *mutable)
-{
-	if (mutable->flags & TNL_F_IPSEC)
-		return htons(VXLAN_IPSEC_SRC_PORT);
+/* The below used as the min/max for the UDP port range */
+#define VXLAN_SRC_PORT_MIN      32768
+#define VXLAN_SRC_PORT_MAX      61000
 
-	/* Convert hash into a port between 32768 and 65535. */
-	return (__force __be16)OVS_CB(skb)->flow->hash | htons(32768);
+/* Compute source port for outgoing packet
+ * first choice to use L4 flow hash since it will spread
+ * better and maybe available from hardware
+ * secondary choice is to use jhash on the Ethernet header
+ */
+static u16 get_src_port(struct sk_buff *skb,
+			const struct tnl_mutable_config *mutable)
+{
+	unsigned int range = (VXLAN_SRC_PORT_MAX - VXLAN_SRC_PORT_MIN) + 1;
+	u32 hash;
+
+	hash = skb_get_rxhash(skb);
+	if (!hash)
+		hash = jhash(skb->data, 2 * ETH_ALEN,
+			     (__force u32) skb->protocol);
+
+	return (__force u16)(((u64) hash * range) >> 32) + VXLAN_SRC_PORT_MIN;
 }
 
 static struct sk_buff *vxlan_build_header(const struct vport *vport,
@@ -164,7 +177,11 @@ static struct sk_buff *vxlan_build_header(const struct vport *vport,
 		udph->dest = htons(mutable->dst_port);
 	else
 		udph->dest = htons(VXLAN_DST_PORT);
-	udph->source = get_src_port(skb, mutable);
+	/* Clear this out since get_src_port() below calls skb_get_rxhash(),
+	 * which includes source UDP port in the hash itself.
+	 */
+	udph->source = 0;
+	udph->source = htons(get_src_port(skb, mutable));
 	udph->check = 0;
 	udph->len = htons(skb->len - skb_transport_offset(skb));
 
