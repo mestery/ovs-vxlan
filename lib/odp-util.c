@@ -167,8 +167,10 @@ format_odp_sample_action(struct ds *ds, const struct nlattr *attr)
 }
 
 static const char *
-slow_path_reason_to_string(enum slow_path_reason bit)
+slow_path_reason_to_string(uint32_t data)
 {
+    enum slow_path_reason bit = (enum slow_path_reason) data;
+
     switch (bit) {
     case SLOW_CFM:
         return "cfm";
@@ -188,28 +190,85 @@ slow_path_reason_to_string(enum slow_path_reason bit)
 }
 
 static void
-format_slow_path_reason(struct ds *ds, uint32_t slow)
+format_flags(struct ds *ds, const char *(*bit_to_string)(uint32_t),
+             uint32_t flags)
 {
     uint32_t bad = 0;
 
-    while (slow) {
-        uint32_t bit = rightmost_1bit(slow);
+    ds_put_format(ds, "(");
+    if (!flags) {
+        goto out;
+    }
+    while (flags) {
+        uint32_t bit = rightmost_1bit(flags);
         const char *s;
 
-        s = slow_path_reason_to_string(bit);
+        s = bit_to_string(bit);
         if (s) {
             ds_put_format(ds, "%s,", s);
         } else {
             bad |= bit;
         }
 
-        slow &= ~bit;
+        flags &= ~bit;
     }
 
     if (bad) {
         ds_put_format(ds, "0x%"PRIx32",", bad);
     }
     ds_chomp(ds, ',');
+out:
+    ds_put_format(ds, ")");
+}
+
+static int
+parse_flags(const char *s, const char *(*bit_to_string)(uint32_t),
+            uint32_t *res)
+{
+    uint32_t result = 0;
+    int n = 0;
+
+    if (s[n] != '(') {
+        return -EINVAL;
+    }
+    n++;
+
+    while (s[n] != ')') {
+        unsigned long long int flags;
+        uint32_t bit;
+        int n0;
+
+        if (sscanf(&s[n], "%lli%n", &flags, &n0) > 0 && n0 > 0) {
+            n += n0 + (s[n + n0] == ',');
+            result |= flags;
+            continue;
+        }
+
+        for (bit = 1; bit; bit <<= 1) {
+            const char *name = bit_to_string(bit);
+            size_t len;
+
+            if (!name) {
+                continue;
+            }
+
+            len = strlen(name);
+            if (!strncmp(s + n, name, len) &&
+                (s[n + len] == ',' || s[n + len] == ')')) {
+                result |= bit;
+                n += len + (s[n + len] == ',');
+                break;
+            }
+        }
+
+        if (!bit) {
+            return -EINVAL;
+        }
+    }
+    n++;
+
+    *res = result;
+    return n;
 }
 
 static void
@@ -245,11 +304,8 @@ format_odp_userspace_action(struct ds *ds, const struct nlattr *attr)
             break;
 
         case USER_ACTION_COOKIE_SLOW_PATH:
-            ds_put_cstr(ds, ",slow_path(");
-            if (cookie.slow_path.reason) {
-                format_slow_path_reason(ds, cookie.slow_path.reason);
-            }
-            ds_put_char(ds, ')');
+            ds_put_cstr(ds, ",slow_path");
+            format_flags(ds, slow_path_reason_to_string, cookie.slow_path.reason);
             break;
 
         case USER_ACTION_COOKIE_UNSPEC:
@@ -415,39 +471,25 @@ parse_odp_action(const char *s, const struct simap *port_names,
             cookie.sflow.output = output;
             odp_put_userspace_action(pid, &cookie, actions);
             return n;
-        } else if (sscanf(s, "userspace(pid=%lli,slow_path(%n", &pid, &n) > 0
+        } else if (sscanf(s, "userspace(pid=%lli,slow_path%n", &pid, &n) > 0
                    && n > 0) {
             union user_action_cookie cookie;
+            int res;
 
             cookie.type = USER_ACTION_COOKIE_SLOW_PATH;
             cookie.slow_path.unused = 0;
             cookie.slow_path.reason = 0;
 
-            while (s[n] != ')') {
-                uint32_t bit;
-
-                for (bit = 1; bit; bit <<= 1) {
-                    const char *reason = slow_path_reason_to_string(bit);
-                    size_t len = strlen(reason);
-
-                    if (reason
-                        && !strncmp(s + n, reason, len)
-                        && (s[n + len] == ',' || s[n + len] == ')'))
-                    {
-                        cookie.slow_path.reason |= bit;
-                        n += len + (s[n + len] == ',');
-                        break;
-                    }
-                }
-
-                if (!bit) {
-                    return -EINVAL;
-                }
+            res = parse_flags(&s[n], slow_path_reason_to_string,
+                              &cookie.slow_path.reason);
+            if (res < 0) {
+                return res;
             }
-            if (s[n + 1] != ')') {
+            n += res;
+            if (s[n] != ')') {
                 return -EINVAL;
             }
-            n += 2;
+            n++;
 
             odp_put_userspace_action(pid, &cookie, actions);
             return n;
@@ -658,6 +700,21 @@ ovs_frag_type_to_string(enum ovs_frag_type type)
     }
 }
 
+static const char *
+tun_flag_to_string(uint32_t flags)
+{
+    switch (flags) {
+    case OVS_TNL_F_DONT_FRAGMENT:
+        return "df";
+    case OVS_TNL_F_CSUM:
+        return "csum";
+    case OVS_TNL_F_KEY:
+        return "key";
+    default:
+        return NULL;
+    }
+}
+
 static void
 format_odp_key_attr(const struct nlattr *a, struct ds *ds)
 {
@@ -703,12 +760,15 @@ format_odp_key_attr(const struct nlattr *a, struct ds *ds)
 
     case OVS_KEY_ATTR_IPV4_TUNNEL:
         ipv4_tun_key = nl_attr_get(a);
-        ds_put_format(ds, "(tun_id=0x%"PRIx64",flags=0x%"PRIx32
-                      ",src="IP_FMT",dst="IP_FMT",tos=0x%"PRIx8",ttl=%"PRIu8")",
-                      ntohll(ipv4_tun_key->tun_id), ipv4_tun_key->tun_flags,
+        ds_put_format(ds, "(tun_id=0x%"PRIx64",src="IP_FMT",dst="IP_FMT","
+                      "tos=0x%"PRIx8",ttl=%"PRIu8",flags",
+                      ntohll(ipv4_tun_key->tun_id),
                       IP_ARGS(&ipv4_tun_key->ipv4_src),
                       IP_ARGS(&ipv4_tun_key->ipv4_dst),
                       ipv4_tun_key->ipv4_tos, ipv4_tun_key->ipv4_ttl);
+
+        format_flags(ds, tun_flag_to_string, ipv4_tun_key->tun_flags);
+        ds_put_format(ds, ")");
         break;
 
     case OVS_KEY_ATTR_IN_PORT:
@@ -926,21 +986,32 @@ parse_odp_key_attr(const char *s, const struct simap *port_names,
 
     {
         char tun_id_s[32];
-        unsigned long long int flags;
         int tos, ttl;
         struct ovs_key_ipv4_tunnel tun_key;
         int n = -1;
 
         if (sscanf(s, "ipv4_tunnel(tun_id=%31[x0123456789abcdefABCDEF],"
-                   "flags=%lli,src="IP_SCAN_FMT",dst="IP_SCAN_FMT
-                   ",tos=%i,ttl=%i)%n", tun_id_s, &flags,
+                   "src="IP_SCAN_FMT",dst="IP_SCAN_FMT
+                   ",tos=%i,ttl=%i,flags%n", tun_id_s,
                     IP_SCAN_ARGS(&tun_key.ipv4_src),
                     IP_SCAN_ARGS(&tun_key.ipv4_dst), &tos, &ttl,
                     &n) > 0 && n > 0) {
+            int res;
+
             tun_key.tun_id = htonll(strtoull(tun_id_s, NULL, 0));
-            tun_key.tun_flags = flags;
             tun_key.ipv4_tos = tos;
             tun_key.ipv4_ttl = ttl;
+
+            res = parse_flags(&s[n], tun_flag_to_string, &tun_key.tun_flags);
+            if (res < 0) {
+                return res;
+            }
+            n += res;
+            if (s[n] != ')') {
+                return -EINVAL;
+            }
+            n++;
+
             memset(&tun_key.pad, 0, sizeof tun_key.pad);
             nl_msg_put_unspec(key, OVS_KEY_ATTR_IPV4_TUNNEL, &tun_key,
                               sizeof tun_key);

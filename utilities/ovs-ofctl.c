@@ -319,7 +319,8 @@ ofctl_exit(struct unixctl_conn *conn, int argc OVS_UNUSED,
 static void run(int retval, const char *message, ...)
     PRINTF_FORMAT(2, 3);
 
-static void run(int retval, const char *message, ...)
+static void
+run(int retval, const char *message, ...)
 {
     if (retval) {
         va_list args;
@@ -762,7 +763,7 @@ try_set_protocol(struct vconn *vconn, enum ofputil_protocol want,
 
         request = ofputil_encode_set_protocol(*cur, want, &next);
         if (!request) {
-            return true;
+            return *cur == want;
         }
 
         run(vconn_transact_noreply(vconn, request, &reply),

@@ -417,6 +417,23 @@ dpif_get_dp_stats(const struct dpif *dpif, struct dpif_dp_stats *stats)
     return error;
 }
 
+const char *
+dpif_port_open_type(const char *datapath_type, const char *port_type)
+{
+    struct registered_dpif_class *registered_class;
+
+    datapath_type = dpif_normalize_type(datapath_type);
+
+    registered_class = shash_find_data(&dpif_classes, datapath_type);
+    if (!registered_class
+            || !registered_class->dpif_class->port_open_type) {
+        return port_type;
+    }
+
+    return registered_class->dpif_class->port_open_type(
+                          registered_class->dpif_class, port_type);
+}
+
 /* Attempts to add 'netdev' as a port on 'dpif'.  If 'port_nop' is
  * non-null and its value is not UINT32_MAX, then attempts to use the
  * value as the port number.
@@ -499,7 +516,7 @@ bool
 dpif_port_exists(const struct dpif *dpif, const char *devname)
 {
     int error = dpif->dpif_class->port_query_by_name(dpif, devname, NULL);
-    if (error != 0 && error != ENODEV) {
+    if (error != 0 && error != ENOENT && error != ENODEV) {
         VLOG_WARN_RL(&error_rl, "%s: failed to query port %s: %s",
                      dpif_name(dpif), devname, strerror(error));
     }

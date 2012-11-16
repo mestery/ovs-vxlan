@@ -181,6 +181,14 @@ dpif_netdev_enumerate(struct sset *all_dps)
     return 0;
 }
 
+static const char *
+dpif_netdev_port_open_type(const struct dpif_class *class, const char *type)
+{
+    return strcmp(type, "internal") ? type
+                  : class != &dpif_netdev_class ? "dummy"
+                  : "tap";
+}
+
 static struct dpif *
 create_dpif_netdev(struct dp_netdev *dp)
 {
@@ -241,7 +249,6 @@ create_dp_netdev(const char *name, const struct dpif_class *class,
                  struct dp_netdev **dpp)
 {
     struct dp_netdev *dp;
-    int port_no;
     int error;
     int i;
 
@@ -255,8 +262,7 @@ create_dp_netdev(const char *name, const struct dpif_class *class,
     hmap_init(&dp->flow_table);
     list_init(&dp->port_list);
 
-    port_no = !strncmp(name, "br", 2) ? choose_port(dp, name) : OVSP_LOCAL;
-    error = do_add_port(dp, name, "internal", port_no);
+    error = do_add_port(dp, name, "internal", OVSP_LOCAL);
     if (error) {
         dp_netdev_free(dp);
         return error;
@@ -371,9 +377,7 @@ do_add_port(struct dp_netdev *dp, const char *devname, const char *type,
     /* XXX reject devices already in some dp_netdev. */
 
     /* Open and validate network device. */
-    open_type = (strcmp(type, "internal") ? type
-                 : dp->class != &dpif_netdev_class ? "dummy"
-                 : "tap");
+    open_type = dpif_netdev_port_open_type(dp->class, type);
     error = netdev_open(devname, open_type, &netdev);
     if (error) {
         return error;
@@ -1284,6 +1288,7 @@ dp_netdev_execute_actions(struct dp_netdev *dp,
 const struct dpif_class dpif_netdev_class = {
     "netdev",
     dpif_netdev_enumerate,
+    dpif_netdev_port_open_type,
     dpif_netdev_open,
     dpif_netdev_close,
     dpif_netdev_destroy,

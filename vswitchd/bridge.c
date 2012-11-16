@@ -227,6 +227,8 @@ static void mirror_refresh_stats(struct mirror *);
 
 static void iface_configure_lacp(struct iface *, struct lacp_slave_settings *);
 static bool iface_create(struct bridge *, struct if_cfg *, int ofp_port);
+static bool iface_is_internal(const struct ovsrec_interface *iface,
+                              const struct ovsrec_bridge *br);
 static const char *iface_get_type(const struct ovsrec_interface *,
                                   const struct ovsrec_bridge *);
 static void iface_destroy(struct iface *);
@@ -1347,7 +1349,8 @@ iface_do_create(const struct bridge *br,
                  br->name, iface_cfg->name, *ofp_portp);
     }
 
-    if (port_cfg->vlan_mode && !strcmp(port_cfg->vlan_mode, "splinter")) {
+    if ((port_cfg->vlan_mode && !strcmp(port_cfg->vlan_mode, "splinter"))
+        || iface_is_internal(iface_cfg, br->cfg)) {
         netdev_turn_flags_on(netdev, NETDEV_UP, true);
     }
 
@@ -3135,20 +3138,32 @@ port_is_synthetic(const struct port *port)
 
 /* Interface functions. */
 
+static bool
+iface_is_internal(const struct ovsrec_interface *iface,
+                  const struct ovsrec_bridge *br)
+{
+    /* The local port and "internal" ports are always "internal". */
+    return !strcmp(iface->type, "internal") || !strcmp(iface->name, br->name);
+}
+
 /* Returns the correct network device type for interface 'iface' in bridge
  * 'br'. */
 static const char *
 iface_get_type(const struct ovsrec_interface *iface,
                const struct ovsrec_bridge *br)
 {
-    /* The local port always has type "internal" unless the bridge is of
-     * type "dummy".  Other ports take their type from the database and
-     * default to "system" if none is specified. */
-    if (!strcmp(iface->name, br->name)) {
-        return !strcmp(br->datapath_type, "dummy") ? "dummy" : "internal";
+    const char *type;
+
+    /* The local port always has type "internal".  Other ports take
+     * their type from the database and default to "system" if none is
+     * specified. */
+    if (iface_is_internal(iface, br)) {
+        type = "internal";
     } else {
-        return iface->type[0] ? iface->type : "system";
+        type = iface->type[0] ? iface->type : "system";
     }
+
+    return ofproto_port_open_type(br->datapath_type, type);
 }
 
 static void
