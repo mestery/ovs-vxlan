@@ -135,6 +135,13 @@ struct tnl_ops {
 	int (*hdr_len)(const struct tnl_mutable_config *,
 		       const struct ovs_key_ipv4_tunnel *);
 	/*
+	 * Some tunnels may need to perform actions on the packet before
+	 * appending the outer IP header of the tunneled packet.
+	 */
+	struct sk_buff *(*pre_tunnel)(const struct vport *,
+				      const struct tnl_mutable_config *,
+				      struct sk_buff *);
+	/*
 	 * Returns a linked list of SKBs with tunnel headers (multiple
 	 * packets may be generated in the event of fragmentation).  Space
 	 * will have already been allocated at the start of the packet equal

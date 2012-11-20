@@ -422,6 +422,7 @@ static const struct tnl_ops gre_tnl_ops = {
 	.tunnel_type	= TNL_T_PROTO_GRE,
 	.ipproto	= IPPROTO_GRE,
 	.hdr_len	= gre_hdr_len,
+	.pre_tunnel	= NULL,
 	.build_header	= gre_build_header,
 };
 
@@ -439,6 +440,7 @@ static const struct tnl_ops gre64_tnl_ops = {
 	.tunnel_type	= TNL_T_PROTO_GRE64,
 	.ipproto	= IPPROTO_GRE,
 	.hdr_len	= gre_hdr_len,
+	.pre_tunnel	= NULL,
 	.build_header	= gre_build_header,
 };
 

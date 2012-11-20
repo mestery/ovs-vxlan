@@ -988,6 +988,11 @@ int ovs_tnl_send(struct vport *vport, struct sk_buff *skb)
 		if (unlikely(vlan_deaccel_tag(skb)))
 			goto next;
 
+		/* Pre tunnel header work done by tunneling layer. */
+		if (tnl_vport->tnl_ops->pre_tunnel)
+			skb = tnl_vport->tnl_ops->pre_tunnel(vport, mutable,
+							     skb);
+
 		skb_push(skb, tunnel_hlen);
 		skb_reset_network_header(skb);
 		skb_set_transport_header(skb, sizeof(struct iphdr));
