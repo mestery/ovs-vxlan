@@ -143,16 +143,10 @@ static inline struct vxlanhdr *vxlan_hdr(const struct sk_buff *skb)
  * better and maybe available from hardware
  * secondary choice is to use jhash on the Ethernet header
  */
-static u16 get_src_port(struct sk_buff *skb,
-			const struct tnl_mutable_config *mutable)
+static u16 get_src_port(struct sk_buff *skb)
 {
 	unsigned int range = (VXLAN_SRC_PORT_MAX - VXLAN_SRC_PORT_MIN) + 1;
-	u32 hash;
-
-	hash = skb_get_rxhash(skb);
-	if (!hash)
-		hash = jhash(skb->data, 2 * ETH_ALEN,
-			     (__force u32) skb->protocol);
+	u32 hash = OVS_CB(skb)->flow->hash;
 
 	return (__force u16)(((u64) hash * range) >> 32) + VXLAN_SRC_PORT_MIN;
 }
@@ -177,11 +171,7 @@ static struct sk_buff *vxlan_build_header(const struct vport *vport,
 		udph->dest = htons(mutable->dst_port);
 	else
 		udph->dest = htons(VXLAN_DST_PORT);
-	/* Clear this out since get_src_port() below calls skb_get_rxhash(),
-	 * which includes source UDP port in the hash itself.
-	 */
-	udph->source = 0;
-	udph->source = htons(get_src_port(skb, mutable));
+	udph->source = htons(get_src_port(skb));
 	udph->check = 0;
 	udph->len = htons(skb->len - skb_transport_offset(skb));
 
