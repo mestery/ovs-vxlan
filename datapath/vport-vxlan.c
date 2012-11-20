@@ -378,6 +378,7 @@ static const struct tnl_ops ovs_vxlan_tnl_ops = {
 	.tunnel_type	= TNL_T_PROTO_VXLAN,
 	.ipproto	= IPPROTO_UDP,
 	.hdr_len	= vxlan_hdr_len,
+	.pre_tunnel	= NULL,
 	.build_header	= vxlan_build_header,
 };
 
@@ -385,6 +386,7 @@ static const struct tnl_ops ovs_ipsec_vxlan_tnl_ops = {
 	.tunnel_type	= TNL_T_PROTO_VXLAN,
 	.ipproto	= IPPROTO_UDP,
 	.hdr_len	= vxlan_hdr_len,
+	.pre_tunnel	= NULL,
 	.build_header	= vxlan_build_header,
 };
 
