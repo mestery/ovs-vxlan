@@ -85,7 +85,7 @@ ofputil_netmask_to_wcbits(ovs_be32 netmask)
 void
 ofputil_wildcard_from_ofpfw10(uint32_t ofpfw, struct flow_wildcards *wc)
 {
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 17);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 18);
 
     /* Initialize most of wc. */
     flow_wildcards_init_catchall(wc);
@@ -588,6 +588,7 @@ static const struct proto_abbrev proto_abbrevs[] = {
 #define N_PROTO_ABBREVS ARRAY_SIZE(proto_abbrevs)
 
 enum ofputil_protocol ofputil_flow_dump_protocols[] = {
+    OFPUTIL_P_OF12_OXM,
     OFPUTIL_P_OF10_NXM,
     OFPUTIL_P_OF10_STD,
 };
@@ -847,7 +848,7 @@ ofputil_protocols_from_string(const char *s)
     return protocols;
 }
 
-static enum ofp_version
+static int
 ofputil_version_from_string(const char *s)
 {
     if (!strcasecmp(s, "OpenFlow10")) {
@@ -859,7 +860,7 @@ ofputil_version_from_string(const char *s)
     if (!strcasecmp(s, "OpenFlow12")) {
         return OFP12_VERSION;
     }
-    VLOG_FATAL("Unknown OpenFlow version: \"%s\"", s);
+    return 0;
 }
 
 static bool
@@ -876,7 +877,7 @@ ofputil_versions_from_string(const char *s)
 
     while (s[i]) {
         size_t j;
-        enum ofp_version version;
+        int version;
         char *key;
 
         if (is_delimiter(s[i])) {
@@ -889,9 +890,29 @@ ofputil_versions_from_string(const char *s)
         }
         key = xmemdup0(s + i, j);
         version = ofputil_version_from_string(key);
+        if (!version) {
+            VLOG_FATAL("Unknown OpenFlow version: \"%s\"", key);
+        }
         free(key);
         bitmap |= 1u << version;
         i += j;
+    }
+
+    return bitmap;
+}
+
+uint32_t
+ofputil_versions_from_strings(char ** const s, size_t count)
+{
+    uint32_t bitmap = 0;
+
+    while (count--) {
+        int version = ofputil_version_from_string(s[count]);
+        if (!version) {
+            VLOG_WARN("Unknown OpenFlow version: \"%s\"", s[count]);
+        } else {
+            bitmap |= 1u << version;
+        }
     }
 
     return bitmap;
@@ -958,6 +979,16 @@ regs_fully_wildcarded(const struct flow_wildcards *wc)
     return true;
 }
 
+static bool
+tun_parms_fully_wildcarded(const struct flow_wildcards *wc)
+{
+    return (!wc->masks.tunnel.ip_src &&
+            !wc->masks.tunnel.ip_dst &&
+            !wc->masks.tunnel.ip_ttl &&
+            !wc->masks.tunnel.ip_tos &&
+            !wc->masks.tunnel.flags);
+}
+
 /* Returns a bit-mask of ofputil_protocols that can be used for sending 'match'
  * to a switch (e.g. to add or remove a flow).  Only NXM can handle tunnel IDs,
  * registers, or fixing the Ethernet multicast bit.  Otherwise, it's better to
@@ -967,7 +998,12 @@ ofputil_usable_protocols(const struct match *match)
 {
     const struct flow_wildcards *wc = &match->wc;
 
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 17);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 18);
+
+    /* tunnel params other than tun_id can't be sent in a flow_mod */
+    if (!tun_parms_fully_wildcarded(wc)) {
+        return OFPUTIL_P_NONE;
+    }
 
     /* NXM, OXM, and OF1.1 support bitwise matching on ethernet addresses. */
     if (!eth_mask_is_exact(wc->masks.dl_src)
@@ -1609,7 +1645,6 @@ ofputil_flow_mod_usable_protocols(const struct ofputil_flow_mod *fms,
             usable_protocols &= OFPUTIL_P_OF10_NXM_ANY | OFPUTIL_P_OF12_OXM;
         }
     }
-    assert(usable_protocols);
 
     return usable_protocols;
 }

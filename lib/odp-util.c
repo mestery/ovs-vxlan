@@ -93,6 +93,7 @@ ovs_key_attr_to_string(enum ovs_key_attr attr)
     case OVS_KEY_ATTR_UNSPEC: return "unspec";
     case OVS_KEY_ATTR_ENCAP: return "encap";
     case OVS_KEY_ATTR_PRIORITY: return "priority";
+    case OVS_KEY_ATTR_SKB_MARK: return "skb_mark";
     case OVS_KEY_ATTR_TUN_ID: return "tun_id";
     case OVS_KEY_ATTR_IPV4_TUNNEL: return "ipv4_tunnel";
     case OVS_KEY_ATTR_IN_PORT: return "in_port";
@@ -189,38 +190,6 @@ slow_path_reason_to_string(uint32_t data)
     }
 }
 
-static void
-format_flags(struct ds *ds, const char *(*bit_to_string)(uint32_t),
-             uint32_t flags)
-{
-    uint32_t bad = 0;
-
-    ds_put_format(ds, "(");
-    if (!flags) {
-        goto out;
-    }
-    while (flags) {
-        uint32_t bit = rightmost_1bit(flags);
-        const char *s;
-
-        s = bit_to_string(bit);
-        if (s) {
-            ds_put_format(ds, "%s,", s);
-        } else {
-            bad |= bit;
-        }
-
-        flags &= ~bit;
-    }
-
-    if (bad) {
-        ds_put_format(ds, "0x%"PRIx32",", bad);
-    }
-    ds_chomp(ds, ',');
-out:
-    ds_put_format(ds, ")");
-}
-
 static int
 parse_flags(const char *s, const char *(*bit_to_string)(uint32_t),
             uint32_t *res)
@@ -304,8 +273,10 @@ format_odp_userspace_action(struct ds *ds, const struct nlattr *attr)
             break;
 
         case USER_ACTION_COOKIE_SLOW_PATH:
-            ds_put_cstr(ds, ",slow_path");
-            format_flags(ds, slow_path_reason_to_string, cookie.slow_path.reason);
+            ds_put_cstr(ds, ",slow_path(");
+            format_flags(ds, slow_path_reason_to_string,
+                         cookie.slow_path.reason, ',');
+            ds_put_format(ds, ")");
             break;
 
         case USER_ACTION_COOKIE_UNSPEC:
@@ -644,6 +615,7 @@ odp_flow_key_attr_len(uint16_t type)
     switch ((enum ovs_key_attr) type) {
     case OVS_KEY_ATTR_ENCAP: return -2;
     case OVS_KEY_ATTR_PRIORITY: return 4;
+    case OVS_KEY_ATTR_SKB_MARK: return 4;
     case OVS_KEY_ATTR_TUN_ID: return 8;
     case OVS_KEY_ATTR_IPV4_TUNNEL: return sizeof(struct ovs_key_ipv4_tunnel);
     case OVS_KEY_ATTR_IN_PORT: return 4;
@@ -701,7 +673,7 @@ ovs_frag_type_to_string(enum ovs_frag_type type)
 }
 
 static const char *
-tun_flag_to_string(uint32_t flags)
+odp_tun_flag_to_string(uint32_t flags)
 {
     switch (flags) {
     case OVS_TNL_F_DONT_FRAGMENT:
@@ -754,6 +726,10 @@ format_odp_key_attr(const struct nlattr *a, struct ds *ds)
         ds_put_format(ds, "(%"PRIu32")", nl_attr_get_u32(a));
         break;
 
+    case OVS_KEY_ATTR_SKB_MARK:
+        ds_put_format(ds, "(%"PRIu32")", nl_attr_get_u32(a));
+        break;
+
     case OVS_KEY_ATTR_TUN_ID:
         ds_put_format(ds, "(%#"PRIx64")", ntohll(nl_attr_get_be64(a)));
         break;
@@ -761,14 +737,15 @@ format_odp_key_attr(const struct nlattr *a, struct ds *ds)
     case OVS_KEY_ATTR_IPV4_TUNNEL:
         ipv4_tun_key = nl_attr_get(a);
         ds_put_format(ds, "(tun_id=0x%"PRIx64",src="IP_FMT",dst="IP_FMT","
-                      "tos=0x%"PRIx8",ttl=%"PRIu8",flags",
+                      "tos=0x%"PRIx8",ttl=%"PRIu8",flags(",
                       ntohll(ipv4_tun_key->tun_id),
                       IP_ARGS(&ipv4_tun_key->ipv4_src),
                       IP_ARGS(&ipv4_tun_key->ipv4_dst),
                       ipv4_tun_key->ipv4_tos, ipv4_tun_key->ipv4_ttl);
 
-        format_flags(ds, tun_flag_to_string, ipv4_tun_key->tun_flags);
-        ds_put_format(ds, ")");
+        format_flags(ds, odp_tun_flag_to_string,
+                     ipv4_tun_key->tun_flags, ',');
+        ds_put_format(ds, "))");
         break;
 
     case OVS_KEY_ATTR_IN_PORT:
@@ -973,6 +950,16 @@ parse_odp_key_attr(const char *s, const struct simap *port_names,
     }
 
     {
+        unsigned long long int mark;
+        int n = -1;
+
+        if (sscanf(s, "skb_mark(%lli)%n", &mark, &n) > 0 && n > 0) {
+            nl_msg_put_u32(key, OVS_KEY_ATTR_SKB_MARK, mark);
+            return n;
+        }
+    }
+
+    {
         char tun_id_s[32];
         int n = -1;
 
@@ -1002,7 +989,8 @@ parse_odp_key_attr(const char *s, const struct simap *port_names,
             tun_key.ipv4_tos = tos;
             tun_key.ipv4_ttl = ttl;
 
-            res = parse_flags(&s[n], tun_flag_to_string, &tun_key.tun_flags);
+            res = parse_flags(&s[n], odp_tun_flag_to_string,
+                              &tun_key.tun_flags);
             if (res < 0) {
                 return res;
             }
@@ -1375,6 +1363,10 @@ odp_flow_key_from_flow(struct ofpbuf *buf, const struct flow *flow,
 
     if (flow->tunnel.tun_id != htonll(0)) {
         nl_msg_put_be64(buf, OVS_KEY_ATTR_TUN_ID, flow->tunnel.tun_id);
+    }
+
+    if (flow->skb_mark) {
+        nl_msg_put_u32(buf, OVS_KEY_ATTR_SKB_MARK, flow->skb_mark);
     }
 
     if (odp_in_port != OVSP_NONE) {
@@ -1869,6 +1861,11 @@ odp_flow_key_to_flow(const struct nlattr *key, size_t key_len,
         expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_PRIORITY;
     }
 
+    if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_SKB_MARK)) {
+        flow->skb_mark = nl_attr_get_u32(attrs[OVS_KEY_ATTR_SKB_MARK]);
+        expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_SKB_MARK;
+    }
+
     if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_TUN_ID)) {
         flow->tunnel.tun_id = nl_attr_get_be64(attrs[OVS_KEY_ATTR_TUN_ID]);
         expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_TUN_ID;
@@ -2129,6 +2126,18 @@ commit_set_priority_action(const struct flow *flow, struct flow *base,
                       &base->skb_priority, sizeof(base->skb_priority));
 }
 
+static void
+commit_set_skb_mark_action(const struct flow *flow, struct flow *base,
+                           struct ofpbuf *odp_actions)
+{
+    if (base->skb_mark == flow->skb_mark) {
+        return;
+    }
+    base->skb_mark = flow->skb_mark;
+
+    commit_set_action(odp_actions, OVS_KEY_ATTR_SKB_MARK,
+                      &base->skb_mark, sizeof(base->skb_mark));
+}
 /* If any of the flow key data that ODP actions can modify are different in
  * 'base' and 'flow', appends ODP actions to 'odp_actions' that change the flow
  * key from 'base' into 'flow', and then changes 'base' the same way. */
@@ -2142,4 +2151,5 @@ commit_odp_actions(const struct flow *flow, struct flow *base,
     commit_set_nw_action(flow, base, odp_actions);
     commit_set_port_action(flow, base, odp_actions);
     commit_set_priority_action(flow, base, odp_actions);
+    commit_set_skb_mark_action(flow, base, odp_actions);
 }

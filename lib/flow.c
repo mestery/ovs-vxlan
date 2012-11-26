@@ -335,7 +335,7 @@ invalid:
  *      present and has a correct length, and otherwise NULL.
  */
 void
-flow_extract(struct ofpbuf *packet, uint32_t skb_priority,
+flow_extract(struct ofpbuf *packet, uint32_t skb_priority, uint32_t skb_mark,
              const struct flow_tnl *tnl, uint16_t ofp_in_port,
              struct flow *flow)
 {
@@ -352,6 +352,7 @@ flow_extract(struct ofpbuf *packet, uint32_t skb_priority,
     }
     flow->in_port = ofp_in_port;
     flow->skb_priority = skb_priority;
+    flow->skb_mark = skb_mark;
 
     packet->l2 = b.data;
     packet->l3 = NULL;
@@ -462,7 +463,7 @@ flow_zero_wildcards(struct flow *flow, const struct flow_wildcards *wildcards)
 void
 flow_get_metadata(const struct flow *flow, struct flow_metadata *fmd)
 {
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 17);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 18);
 
     fmd->tun_id = flow->tunnel.tun_id;
     fmd->metadata = flow->metadata;
@@ -476,6 +477,50 @@ flow_to_string(const struct flow *flow)
     struct ds ds = DS_EMPTY_INITIALIZER;
     flow_format(&ds, flow);
     return ds_cstr(&ds);
+}
+
+const char *
+flow_tun_flag_to_string(uint32_t flags)
+{
+    switch (flags) {
+    case FLOW_TNL_F_DONT_FRAGMENT:
+        return "df";
+    case FLOW_TNL_F_CSUM:
+        return "csum";
+    case FLOW_TNL_F_KEY:
+        return "key";
+    default:
+        return NULL;
+    }
+}
+
+void
+format_flags(struct ds *ds, const char *(*bit_to_string)(uint32_t),
+             uint32_t flags, char del)
+{
+    uint32_t bad = 0;
+
+    if (!flags) {
+        return;
+    }
+    while (flags) {
+        uint32_t bit = rightmost_1bit(flags);
+        const char *s;
+
+        s = bit_to_string(bit);
+        if (s) {
+            ds_put_format(ds, "%s%c", s, del);
+        } else {
+            bad |= bit;
+        }
+
+        flags &= ~bit;
+    }
+
+    if (bad) {
+        ds_put_format(ds, "0x%"PRIx32"%c", bad, del);
+    }
+    ds_chomp(ds, del);
 }
 
 void
@@ -510,6 +555,7 @@ void
 flow_wildcards_init_exact(struct flow_wildcards *wc)
 {
     memset(&wc->masks, 0xff, sizeof wc->masks);
+    memset(wc->masks.zeros, 0, sizeof wc->masks.zeros);
 }
 
 /* Returns true if 'wc' matches every packet, false if 'wc' fixes any bits or

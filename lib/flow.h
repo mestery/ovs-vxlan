@@ -36,7 +36,7 @@ struct ofpbuf;
 /* This sequence number should be incremented whenever anything involving flows
  * or the wildcarding of flows changes.  This will cause build assertion
  * failures in places which likely need to be updated. */
-#define FLOW_WC_SEQ 17
+#define FLOW_WC_SEQ 18
 
 #define FLOW_N_REGS 8
 BUILD_ASSERT_DECL(FLOW_N_REGS <= NXM_NX_MAX_REGS);
@@ -56,6 +56,9 @@ BUILD_ASSERT_DECL(FLOW_NW_FRAG_LATER == NX_IP_FRAG_LATER);
 #define FLOW_TNL_F_DONT_FRAGMENT (1 << 0)
 #define FLOW_TNL_F_CSUM (1 << 1)
 #define FLOW_TNL_F_KEY (1 << 2)
+
+const char *flow_tun_flag_to_string(uint32_t flags);
+
 struct flow_tnl {
     ovs_be64 tun_id;
     ovs_be32 ip_src;
@@ -87,6 +90,7 @@ struct flow {
     uint32_t in_port;           /* Input port. OpenFlow port number
                                    unless in DPIF code, in which case it
                                    is the datapath port number. */
+    uint32_t skb_mark;          /* Packet mark. */
     ovs_be16 vlan_tci;          /* If 802.1Q, TCI | VLAN_CFI; otherwise 0. */
     ovs_be16 dl_type;           /* Ethernet frame type. */
     ovs_be16 tp_src;            /* TCP/UDP source port. */
@@ -99,14 +103,15 @@ struct flow {
     uint8_t arp_tha[6];         /* ARP/ND target hardware address. */
     uint8_t nw_ttl;             /* IP TTL/Hop Limit. */
     uint8_t nw_frag;            /* FLOW_FRAG_* flags. */
+    uint8_t zeros[4];
 };
 BUILD_ASSERT_DECL(sizeof(struct flow) % 4 == 0);
 
 #define FLOW_U32S (sizeof(struct flow) / 4)
 
 /* Remember to update FLOW_WC_SEQ when changing 'struct flow'. */
-BUILD_ASSERT_DECL(sizeof(struct flow) == sizeof(struct flow_tnl) + 144 &&
-                  FLOW_WC_SEQ == 17);
+BUILD_ASSERT_DECL(sizeof(struct flow) == sizeof(struct flow_tnl) + 152 &&
+                  FLOW_WC_SEQ == 18);
 
 /* Represents the metadata fields of struct flow. */
 struct flow_metadata {
@@ -116,12 +121,15 @@ struct flow_metadata {
     uint16_t in_port;                /* OpenFlow port or zero. */
 };
 
-void flow_extract(struct ofpbuf *, uint32_t priority, const struct flow_tnl *,
-                  uint16_t in_port, struct flow *);
+void flow_extract(struct ofpbuf *, uint32_t priority, uint32_t mark,
+                  const struct flow_tnl *, uint16_t in_port, struct flow *);
 void flow_zero_wildcards(struct flow *, const struct flow_wildcards *);
 void flow_get_metadata(const struct flow *, struct flow_metadata *);
 
 char *flow_to_string(const struct flow *);
+void format_flags(struct ds *ds, const char *(*bit_to_string)(uint32_t),
+                  uint32_t flags, char del);
+
 void flow_format(struct ds *, const struct flow *);
 void flow_print(FILE *, const struct flow *);
 static inline int flow_compare_3way(const struct flow *, const struct flow *);
