@@ -70,6 +70,14 @@
 #define OFPP11_MAX    0xffffff00
 #define OFPP11_OFFSET (OFPP11_MAX - OFPP_MAX)
 
+/* Reserved wildcard port used only for flow mod (delete) and flow stats
+ * requests. Selects all flows regardless of output port
+ * (including flows with no output port)
+ *
+ * Define it via OFPP_NONE (0xFFFF) so that OFPP_ANY is still an enum ofp_port
+ */
+#define OFPP_ANY OFPP_NONE
+
 /* OpenFlow 1.1 port config flags are just the common flags. */
 #define OFPPC11_ALL \
     (OFPPC_PORT_DOWN | OFPPC_NO_RECV | OFPPC_NO_FWD | OFPPC_NO_PACKET_IN)
@@ -119,6 +127,7 @@ struct ofp11_port {
     ovs_be32 curr_speed;    /* Current port bitrate in kbps. */
     ovs_be32 max_speed;     /* Max port bitrate in kbps */
 };
+OFP_ASSERT(sizeof(struct ofp11_port) == 64);
 
 /* Modify behavior of the physical port */
 struct ofp11_port_mod {
@@ -580,7 +589,8 @@ struct ofp11_flow_stats {
                                   when this is not an exact-match entry. */
     ovs_be16 idle_timeout;     /* Number of seconds idle before expiration. */
     ovs_be16 hard_timeout;     /* Number of seconds before expiration. */
-    uint8_t pad2[6];           /* Align to 64-bits. */
+    ovs_be16 flags;            /* OF 1.3: Set of OFPFF*. */
+    uint8_t  pad2[4];          /* Align to 64-bits. */
     ovs_be64 cookie;           /* Opaque controller-issued identifier. */
     ovs_be64 packet_count;     /* Number of packets in flow. */
     ovs_be64 byte_count;       /* Number of bytes in flow. */

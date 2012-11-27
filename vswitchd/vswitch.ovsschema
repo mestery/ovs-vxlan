@@ -1,6 +1,6 @@
 {"name": "Open_vSwitch",
- "version": "6.11.1",
- "cksum": "2684374538 17324",
+ "version": "6.11.3",
+ "cksum": "2234602985 17310",
  "tables": {
    "Open_vSwitch": {
      "columns": {
@@ -76,7 +76,7 @@
                   "min": 0, "max": "unlimited"}},
        "protocols": {
          "type": {"key": {"type": "string",
-           "enum": ["set", ["OpenFlow10", "OpenFlow12"]]},
+           "enum": ["set", ["OpenFlow10", "OpenFlow12", "OpenFlow13"]]},
 	   "min": 0, "max": "unlimited"}},
        "fail_mode": {
          "type": {"key": {"type": "string",
@@ -180,8 +180,7 @@
        "external_ids": {
          "type": {"key": "string", "value": "string", "min": 0, "max": "unlimited"}},
        "ofport": {
-         "type": {"key": "integer", "min": 0, "max": 1},
-         "ephemeral": true},
+         "type": {"key": "integer", "min": 0, "max": 1}},
        "ofport_request": {
          "type": {
            "key": {"type": "integer",
