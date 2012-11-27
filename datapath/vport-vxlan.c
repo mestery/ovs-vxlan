@@ -28,8 +28,8 @@
 #include "vport.h"
 #include "vport-generic.h"
 
+/* Default to the OTV port, per the VXLAN IETF draft. */
 #define VXLAN_DST_PORT 8472
-#define VXLAN_IPSEC_SRC_PORT 4564
 
 #define VXLAN_FLAGS 0x08000000  /* struct vxlanhdr.vx_flags required value. */
 
@@ -138,10 +138,8 @@ static inline struct vxlanhdr *vxlan_hdr(const struct sk_buff *skb)
 #define VXLAN_SRC_PORT_MIN      32768
 #define VXLAN_SRC_PORT_MAX      61000
 
-/* Compute source port for outgoing packet
- * first choice to use L4 flow hash since it will spread
- * better and maybe available from hardware
- * secondary choice is to use jhash on the Ethernet header
+/* Compute source port for outgoing packet.
+ * Currently we use the flow hash.
  */
 static u16 get_src_port(struct sk_buff *skb)
 {
@@ -365,14 +363,6 @@ out:
 }
 
 static const struct tnl_ops ovs_vxlan_tnl_ops = {
-	.tunnel_type	= TNL_T_PROTO_VXLAN,
-	.ipproto	= IPPROTO_UDP,
-	.hdr_len	= vxlan_hdr_len,
-	.pre_tunnel	= NULL,
-	.build_header	= vxlan_build_header,
-};
-
-static const struct tnl_ops ovs_ipsec_vxlan_tnl_ops = {
 	.tunnel_type	= TNL_T_PROTO_VXLAN,
 	.ipproto	= IPPROTO_UDP,
 	.hdr_len	= vxlan_hdr_len,

@@ -4,9 +4,8 @@ post-v1.9.0
 
 v1.9.0 - xx xxx xxxx
 --------------------
-    - New support for the experimental VXLAN tunnel protocol (see
-      http://tools.ietf.org/html/draft-mahalingam-dutt-dcops-vxlan-02)
-      and VXLAN over IPSEC.
+    - New support for the VXLAN tunnel protocol (see the IETF draft here:
+      http://tools.ietf.org/html/draft-mahalingam-dutt-dcops-vxlan-02).
     - The tunneling code no longer assumes input and output keys are symmetric.
       If they are not, PMTUD needs to be disabled for tunneling to work. Note
       this only applies to flow-based keys.

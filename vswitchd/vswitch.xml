@@ -1254,20 +1254,11 @@
 	    </p>
 	    <p>
 	      As an experimental protocol, VXLAN has no officially assigned UDP
-	      port.  Open vSwitch currently uses UDP destination port 4563.
+	      port.  Open vSwitch currently uses UDP destination port 8472.
 	      The source port used for VXLAN traffic varies on a per-flow basis
 	      between 32768 and 65535 to allow load balancing.
 	    </p>
           </dd>
-
-	  <dt><code>ipsec_vxlan</code></dt>
-	  <dd>
-	    VXLAN over an IPSEC tunnel.  As an exception to the usual rule that
-	    only one tunnel with the same matching criteria is allowed at a
-	    time, it is possible to have one <code>vxlan</code> tunnel and one
-	    <code>ipsec_vxlan</code> tunnel at the same time that are otherwise
-	    equivalent.
-	  </dd>
 
           <dt><code>patch</code></dt>
           <dd>
@@ -1285,8 +1276,8 @@
       <p>
         These options apply to interfaces with <ref column="type"/> of
         <code>gre</code>, <code>ipsec_gre</code>, <code>gre64</code>,
-        <code>ipsec_gre64</code>, <code>capwap</code>.
-        <code>vxlan</code>, and <code>vxlan_ipsec</code>.
+        <code>ipsec_gre64</code>, <code>capwap</code>, and
+        <code>vxlan</code>.
       </p>
 
       <p>

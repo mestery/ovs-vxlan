@@ -51,9 +51,7 @@ start () {
     set "$@" $OVS_CTL_OPTS
     "$@"
 
-    # Allow tunnel traffic.
     $ovs_ctl --protocol=gre enable-protocol
-    $ovs_ctl --protocol=udp --dport=4563 enable-protocol
 
     touch /var/lock/subsys/openvswitch
 }

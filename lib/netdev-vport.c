@@ -178,8 +178,7 @@ netdev_vport_get_netdev_type(const struct dpif_linux_vport *vport)
                                         a)) {
             break;
         }
-        return (nl_attr_get_u32(a[OVS_TUNNEL_ATTR_FLAGS]) & TNL_F_IPSEC
-                ? "ipsec_vxlan" : "vxlan");
+        return ("vxlan");
 
     case OVS_VPORT_TYPE_FT_GRE:
     case __OVS_VPORT_TYPE_MAX:
@@ -611,7 +610,7 @@ parse_tunnel_config(const char *name, const char *type,
         is_gre = true;
         is_ipsec = true;
         flags |= TNL_F_IPSEC;
-    } else if (!strcmp(type, "vxlan") || !strcmp(type, "ipsec_vxlan")) {
+    } else if (!strcmp(type, "vxlan")) {
         is_vxlan = true;
     }
 
@@ -1011,10 +1010,6 @@ netdev_vport_register(void)
 
         { OVS_VPORT_TYPE_VXLAN,
           { "vxlan", VPORT_FUNCTIONS(netdev_vport_get_drv_info) },
-          parse_tunnel_config, unparse_tunnel_config },
-
-        { OVS_VPORT_TYPE_VXLAN,
-          { "vxlan_ipsec", VPORT_FUNCTIONS(netdev_vport_get_drv_info) },
           parse_tunnel_config, unparse_tunnel_config },
 
         { OVS_VPORT_TYPE_PATCH,
