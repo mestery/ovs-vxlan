@@ -86,6 +86,7 @@ enum ofputil_protocol {
      * variant. */
     OFPUTIL_P_OF12_OXM      = 1 << 4,
     OFPUTIL_P_OF13_OXM      = 1 << 5,
+#define OFPUTIL_P_ANY_OXM (OFPUTIL_P_OF12_OXM | OFPUTIL_P_OF13_OXM)
 
     /* All protocols. */
 #define OFPUTIL_P_ANY ((1 << 6) - 1)
@@ -93,17 +94,16 @@ enum ofputil_protocol {
     /* Protocols in which a specific table may be specified in flow_mods. */
 #define OFPUTIL_P_TID (OFPUTIL_P_OF10_STD_TID | \
                        OFPUTIL_P_OF10_NXM_TID | \
-                       OFPUTIL_P_OF12_OXM | \
-                       OFPUTIL_P_OF13_OXM)
+                       OFPUTIL_P_ANY_OXM)
 };
 
 /* Protocols to use for flow dumps, from most to least preferred. */
 extern enum ofputil_protocol ofputil_flow_dump_protocols[];
 extern size_t ofputil_n_flow_dump_protocols;
 
-enum ofputil_protocol
-ofputil_protocol_from_ofp_version(enum ofp_version version);
-enum ofp_version  ofputil_protocol_to_ofp_version(enum ofputil_protocol);
+enum ofputil_protocol ofputil_protocol_from_ofp_version(enum ofp_version);
+enum ofputil_protocol ofputil_protocols_from_ofp_version(enum ofp_version);
+enum ofp_version ofputil_protocol_to_ofp_version(enum ofputil_protocol);
 
 bool ofputil_protocol_is_valid(enum ofputil_protocol);
 enum ofputil_protocol ofputil_protocol_set_tid(enum ofputil_protocol,
@@ -129,6 +129,9 @@ void ofputil_format_version_name(struct ds *, enum ofp_version);
 
 void ofputil_format_version_bitmap(struct ds *msg, uint32_t bitmap);
 void ofputil_format_version_bitmap_names(struct ds *msg, uint32_t bitmap);
+
+uint32_t ofputil_protocols_to_version_bitmap(enum ofputil_protocol);
+enum ofputil_protocol ofputil_protocols_from_version_bitmap(uint32_t bitmap);
 
 /* Bitmap of OpenFlow versions that Open vSwitch supports. */
 #define OFPUTIL_SUPPORTED_VERSIONS \

@@ -21,6 +21,12 @@ set_allowed_ofp_versions(const char *string)
 }
 
 void
+mask_allowed_ofp_versions(uint32_t bitmap)
+{
+    allowed_versions &= bitmap;
+}
+
+void
 ofp_version_usage(void)
 {
     struct ds msg = DS_EMPTY_INITIALIZER;
@@ -29,7 +35,7 @@ ofp_version_usage(void)
     printf(
         "\nOpen Flow Version options:\n"
         "  -V, --version           display version information\n"
-        "  --allowed-ofp-versions  list of allowed Open Flow versions\n"
+        "  -O, --protocols         set allowed Open Flow versions\n"
         "                          (default: %s)\n",
         ds_cstr(&msg));
     ds_destroy(&msg);
