@@ -1,10 +1,20 @@
- /*
+/*
  * Copyright (c) 2011 Nicira, Inc.
  * Copyright (c) 2012 Cisco Systems, Inc.
- * Distributed under the terms of the GNU GPL version 2.
  *
- * Significant portions of this file may be copied from parts of the Linux
- * kernel, by Linus Torvalds and others.
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of version 2 of the GNU General Public
+ * License as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -14,7 +24,6 @@
 
 #include <linux/in.h>
 #include <linux/ip.h>
-#include <linux/jhash.h>
 #include <linux/list.h>
 #include <linux/net.h>
 #include <linux/udp.h>
@@ -27,9 +36,6 @@
 #include "tunnel.h"
 #include "vport.h"
 #include "vport-generic.h"
-
-/* Default to the OTV port, per the VXLAN IETF draft. */
-#define VXLAN_DST_PORT 8472
 
 #define VXLAN_FLAGS 0x08000000  /* struct vxlanhdr.vx_flags required value. */
 
@@ -52,78 +58,62 @@ static inline int vxlan_hdr_len(const struct tnl_mutable_config *mutable,
 }
 
 /**
- * struct vxlan_port - Keeps track of open UDP ports
- * @port: The UDP port number.
- * @socket: The socket created for this port number.
- * @count: How many ports are using this socket/port.
- * @hash_node: Hash node.
+ * struct if_names - List of names
+ * @list: list element.
+ * @name: The name of the interface.
  */
-struct vxlan_port {
-	u16 port;
-	struct socket *vxlan_rcv_socket;
-	int count;
-
-	/* Protected by RTNL lock. */
-	struct hlist_node hash_node;
+struct if_name {
+	struct list_head list;
+	char name[IFNAMSIZ];
 };
-
-/* Protected by RTNL lock. */
-static struct hlist_head *vxlan_ports;
-#define VXLAN_SOCK_HASH_BUCKETS 64
 
 /**
- * struct vxlan_if - Maps port names to UDP port numbers
- * @port: The UDP port number this interface is using.
- * @ifname: The name of the interface.
- * @hash_node: Hash node.
+ * struct vxlan_port - Keeps track of open UDP ports
+ * @list: list element.
+ * @port: The UDP port number.
+ * @net: The net namespace this port is assosciated with.
+ * @if_names: List of names this port is assosciated with.
+ * @socket: The socket created for this port number.
+ * @count: How many ports are using this socket/port.
  */
-struct vxlan_if {
+struct vxlan_port {
+	struct list_head list;
 	u16 port;
-	char ifname[IFNAMSIZ];
-
-	/* Protected by RTNL lock. */
-	struct hlist_node hash_node;
+	struct net *net;
+	struct list_head if_names;
+	struct socket *vxlan_rcv_socket;
+	int count;
 };
 
-/* Protected by RTNL lock. */
-static struct hlist_head *vxlan_ifs;
-#define VXLAN_IF_HASH_BUCKETS 64
-
-static struct hlist_head *vxlan_hash_bucket(struct net *net, u16 port)
-{
-	unsigned int hash = jhash(&port, sizeof(port), (unsigned long) net);
-	return &vxlan_ports[hash & (VXLAN_SOCK_HASH_BUCKETS - 1)];
-}
+LIST_HEAD(vxlan_ports);
 
 static struct vxlan_port *vxlan_port_exists(struct net *net, u16 port)
 {
-	struct hlist_head *bucket = vxlan_hash_bucket(net, port);
 	struct vxlan_port *vxlan_port;
-	struct hlist_node *node;
 
-	hlist_for_each_entry(vxlan_port, node, bucket, hash_node) {
-		if (vxlan_port->port == port)
+	list_for_each_entry(vxlan_port, &vxlan_ports, list) {
+		if (vxlan_port->port == port && vxlan_port->net == net)
 			return vxlan_port;
 	}
 
 	return NULL;
 }
 
-static struct hlist_head *vxlanif_hash_bucket(struct net *net, const char *name)
+static struct vxlan_port *find_vxlan_port_by_name(struct net *net,
+						  const char *name)
 {
-	unsigned int hash = jhash(name, strlen(name), (unsigned long) net);
-	return &vxlan_ifs[hash & (VXLAN_IF_HASH_BUCKETS - 1)];
-}
+	struct vxlan_port *vxlan_port;
 
-static struct vxlan_if *vxlan_if_by_name(struct net *net, const char *name)
-{
-	struct hlist_head *bucket = vxlanif_hash_bucket(net, name);
-	struct vxlan_if *vxlan_if;
-	struct hlist_node *node;
+	list_for_each_entry(vxlan_port, &vxlan_ports, list) {
+		if (vxlan_port->net == net) {
+			struct if_name *if_name;
 
-	hlist_for_each_entry(vxlan_if, node, bucket, hash_node) {
-		if (!strcmp(vxlan_if->ifname, name))
-			return vxlan_if;
+			list_for_each_entry(if_name, &vxlan_port->if_names,
+					    list) {
+				if (!strcmp(if_name->name, name))
+					return vxlan_port;
+			}
+		}
 	}
 
 	return NULL;
@@ -134,19 +124,19 @@ static inline struct vxlanhdr *vxlan_hdr(const struct sk_buff *skb)
 	return (struct vxlanhdr *)(udp_hdr(skb) + 1);
 }
 
-/* The below used as the min/max for the UDP port range */
-#define VXLAN_SRC_PORT_MIN      32768
-#define VXLAN_SRC_PORT_MAX      61000
-
 /* Compute source port for outgoing packet.
  * Currently we use the flow hash.
  */
 static u16 get_src_port(struct sk_buff *skb)
 {
-	unsigned int range = (VXLAN_SRC_PORT_MAX - VXLAN_SRC_PORT_MIN) + 1;
+	int low;
+	int high;
+	unsigned int range;
 	u32 hash = OVS_CB(skb)->flow->hash;
 
-	return (__force u16)(((u64) hash * range) >> 32) + VXLAN_SRC_PORT_MIN;
+        inet_get_local_port_range(&low, &high);
+        range = (high - low) + 1;
+	return (((u64) hash * range) >> 32) + low;
 }
 
 static struct sk_buff *vxlan_build_header(const struct vport *vport,
@@ -159,16 +149,11 @@ static struct sk_buff *vxlan_build_header(const struct vport *vport,
 	struct vxlanhdr *vxh = (struct vxlanhdr *)(udph + 1);
 	const struct ovs_key_ipv4_tunnel *tun_key = OVS_CB(skb)->tun_key;
 	__be64 out_key;
+	u32 flags;
 
-	if (tun_key->ipv4_dst)
-		out_key = tun_key->tun_id;
-	else
-		out_key = mutable->out_key;
+	tnl_get_param(mutable, tun_key, &flags, &out_key);
 
-	if (mutable->dst_port)
-		udph->dest = htons(mutable->dst_port);
-	else
-		udph->dest = htons(VXLAN_DST_PORT);
+	udph->dest = htons(mutable->dst_port);
 	udph->source = htons(get_src_port(skb));
 	udph->check = 0;
 	udph->len = htons(skb->len - skb_transport_offset(skb));
@@ -196,7 +181,6 @@ static int vxlan_rcv(struct sock *sk, struct sk_buff *skb)
 	const struct tnl_mutable_config *mutable;
 	struct iphdr *iph;
 	struct ovs_key_ipv4_tunnel tun_key;
-	int tunnel_type;
 	__be64 key;
 	u32 tunnel_flags = 0;
 
@@ -213,11 +197,9 @@ static int vxlan_rcv(struct sock *sk, struct sk_buff *skb)
 
 	key = cpu_to_be64(ntohl(vxh->vx_vni) >> 8);
 
-	tunnel_type = TNL_T_PROTO_VXLAN;
-
 	iph = ip_hdr(skb);
 	vport = ovs_tnl_find_port(dev_net(skb->dev), iph->daddr, iph->saddr,
-		key, tunnel_type, &mutable);
+		key, TNL_T_PROTO_VXLAN, &mutable);
 	if (unlikely(!vport)) {
 		icmp_send(skb, ICMP_DEST_UNREACH, ICMP_PORT_UNREACH, 0);
 		goto error;
@@ -242,15 +224,19 @@ out:
 }
 
 /* Random value.  Irrelevant as long as it's not 0 since we set the handler. */
-#define UDP_ENCAP_VXLAN 10
-static int vxlan_socket_init(struct vxlan_port *vxlan_port)
+#define UDP_ENCAP_VXLAN 1
+static int vxlan_socket_init(struct vxlan_port *vxlan_port, struct net *net)
 {
 	int err;
 	struct sockaddr_in sin;
 
-	err = sock_create(AF_INET, SOCK_DGRAM, 0, &vxlan_port->vxlan_rcv_socket);
+	err = sock_create_kern(AF_INET, SOCK_DGRAM, 0,
+			       &vxlan_port->vxlan_rcv_socket);
 	if (err)
 		goto error;
+
+	/* release net ref. */
+	sk_change_net(vxlan_port->vxlan_rcv_socket->sk, net);
 
 	sin.sin_family = AF_INET;
 	sin.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -275,89 +261,136 @@ error:
 	return err;
 }
 
-static const struct nla_policy vxlan_policy[OVS_TUNNEL_ATTR_MAX + 1] = {
-	[OVS_TUNNEL_ATTR_DST_PORT] = { .type = NLA_U16 },
-};
-
-static int vxlan_tunnel_setup(struct net *net, const char *linkname,
-			     struct nlattr *options)
+static void vxlan_tunnel_release(struct vxlan_port *vxlan_port)
 {
-	struct nlattr *a[OVS_TUNNEL_ATTR_MAX + 1];
+	vxlan_port->count--;
+
+	if (vxlan_port->count == 0) {
+		struct list_head *p;
+		struct list_head *n;
+
+		list_for_each_safe(p, n, &vxlan_port->if_names) {
+			struct if_name *if_name;
+
+			if_name = list_entry(p, struct if_name, list);
+			list_del(&if_name->list);
+			kfree(if_name);
+		}
+		/* Release old socket */
+		sock_release(vxlan_port->vxlan_rcv_socket);
+		list_del(&vxlan_port->list);
+		kfree(vxlan_port);
+	}
+}
+static int vxlan_tunnel_setup(struct net *net, const char *name,
+			      struct nlattr *options,
+			      struct vxlan_port **vxport)
+{
+	struct nlattr *a;
 	int err;
 	u16 dst_port;
-	struct vxlan_port *vxlan_port;
-	struct vxlan_if *vxlan_if;
+	struct vxlan_port *vxlan_port = NULL;
+	struct if_name *if_name = NULL;
+
+	*vxport = NULL;
 
 	if (!options) {
 		err = -EINVAL;
 		goto out;
 	}
 
-	err = nla_parse_nested(a, OVS_TUNNEL_ATTR_MAX, options, vxlan_policy);
-	if (err)
+	a = nla_find_nested(options, OVS_TUNNEL_ATTR_DST_PORT);
+	if (a && nla_len(a) == sizeof(u16)) {
+		dst_port = nla_get_u16(a);
+	} else {
+		/* Require destination port from userspace. */
+		err = -EINVAL;
 		goto out;
-
-	if (a[OVS_TUNNEL_ATTR_DST_PORT])
-		dst_port = nla_get_u16(a[OVS_TUNNEL_ATTR_DST_PORT]);
-	else
-		dst_port = VXLAN_DST_PORT;
+	}
 
 	/* Verify if we already have a socket created for this port */
 	vxlan_port = vxlan_port_exists(net, dst_port);
 	if (vxlan_port) {
+		if_name = kzalloc(sizeof(struct if_name), GFP_KERNEL);
+		if (!if_name) {
+			err = -ENOMEM;
+			goto error;
+		}
+
 		vxlan_port->count++;
+		strcpy(if_name->name, name);
+		list_add_tail(&if_name->list, &vxlan_port->if_names);
 		err = 0;
 		goto out;
 	}
 
 	/* Add a new socket for this port */
-	vxlan_port = kmalloc(sizeof(struct vxlan_port), GFP_KERNEL);
+	vxlan_port = kzalloc(sizeof(struct vxlan_port), GFP_KERNEL);
 	if (!vxlan_port) {
 		err = -ENOMEM;
-		goto out;
+		goto error;
 	}
-	memset (vxlan_port, 0, sizeof(struct vxlan_port));
+
+	if_name = kzalloc(sizeof(struct if_name), GFP_KERNEL);
+	if (!if_name) {
+		err = -ENOMEM;
+		goto error;
+	}
 
 	vxlan_port->port = dst_port;
-	vxlan_port->count++;
-	hlist_add_head(&vxlan_port->hash_node,
-		       vxlan_hash_bucket(net, dst_port));
+	vxlan_port->net = net;
+	vxlan_port->count = 1;
+	strcpy(if_name->name, name);
+	INIT_LIST_HEAD(&vxlan_port->if_names);
+	list_add_tail(&if_name->list, &vxlan_port->if_names);
+	list_add_tail(&vxlan_port->list, &vxlan_ports);
 
-	err = vxlan_socket_init(vxlan_port);
+	err = vxlan_socket_init(vxlan_port, net);
 	if (err)
-		goto error_vxlan_if;
+		goto error;
 
-	vxlan_if = kmalloc(sizeof(struct vxlan_if), GFP_KERNEL);
-	if (!vxlan_if) {
-		err = -ENOMEM;
-		goto error_vxlan_if;
+	*vxport = vxlan_port;
+	goto out;
+
+error:
+	if (if_name) {
+		list_del(&if_name->list);
+		kfree(if_name);
 	}
-	memset(vxlan_if, 0, sizeof(*vxlan_if));
-
-	vxlan_if->port = dst_port;
-	memcpy(vxlan_if->ifname, linkname, IFNAMSIZ);
-	hlist_add_head(&vxlan_if->hash_node,
-		       vxlanif_hash_bucket(net, linkname));
-
+	if (vxlan_port) {
+		list_del(&vxlan_port->list);
+		kfree(vxlan_port);
+	}
 out:
 	return err;
-error_vxlan_if:
-	hlist_del(&vxlan_port->hash_node);
-	kfree(vxlan_port);
-	goto out;
 }
 
 static int vxlan_set_options(struct vport *vport, struct nlattr *options)
 {
 	int err;
 	const char *vname = vport->ops->get_name(vport);
+	struct net *net = ovs_dp_get_net(vport->dp);
+	struct tnl_vport *tnl_vport = tnl_vport_priv(vport);
+	struct tnl_mutable_config *config;
+	struct vxlan_port *old_port = NULL;
+	struct vxlan_port *vxlan_port = NULL;
 
-	err = vxlan_tunnel_setup(ovs_dp_get_net(vport->dp), vname, options);
+	config = rtnl_dereference(tnl_vport->mutable);
+
+	old_port = find_vxlan_port_by_name(net, vname);
+	if (old_port && old_port->port == config->dst_port) {
+		/* Release old socket */
+		vxlan_tunnel_release(old_port);
+	}
+
+	err = vxlan_tunnel_setup(net, vname, options, &vxlan_port);
 	if (err)
 		goto out;
 
 	err = ovs_tnl_set_options(vport, options);
 
+	if (err)
+		vxlan_tunnel_release(vxlan_port);
 out:
 	return err;
 }
@@ -370,30 +403,21 @@ static const struct tnl_ops ovs_vxlan_tnl_ops = {
 	.build_header	= vxlan_build_header,
 };
 
-void vxlan_tnl_destroy(struct vport *vport)
+static void vxlan_tnl_destroy(struct vport *vport)
 {
-	struct vxlan_if *vxlan_if;
 	struct vxlan_port *vxlan_port;
-	const char *vname = vport->ops->get_name(vport);
+	struct tnl_vport *tnl_vport = tnl_vport_priv(vport);
+	struct tnl_mutable_config *config;
 
-	vxlan_if = vxlan_if_by_name(ovs_dp_get_net(vport->dp), vname);
-	if (!vxlan_if)
-		goto out;
+	config = rtnl_dereference(tnl_vport->mutable);
 
 	vxlan_port = vxlan_port_exists(ovs_dp_get_net(vport->dp),
-					 vxlan_if->port);
+					 config->dst_port);
 	if (!vxlan_port)
-		goto out_if;
+		goto out;
 
-	if (!--vxlan_port->count) {
-		sock_release(vxlan_port->vxlan_rcv_socket);
-		hlist_del(&vxlan_port->hash_node);
-		kfree(vxlan_port);
-	}
+	vxlan_tunnel_release(vxlan_port);
 
-out_if:
-	hlist_del(&vxlan_if->hash_node);
-	kfree(vxlan_if);
 out:
 	ovs_tnl_destroy(vport);
 }
@@ -401,48 +425,28 @@ out:
 static struct vport *vxlan_tnl_create(const struct vport_parms *parms)
 {
 	int err;
+	struct vport *vport;
+	struct vxlan_port *vxlan_port = NULL;
 
 	err = vxlan_tunnel_setup(ovs_dp_get_net(parms->dp), parms->name,
-						parms->options);
-	return ovs_tnl_create(parms, &ovs_vxlan_vport_ops, &ovs_vxlan_tnl_ops);
-}
-
-static int vxlan_init(void)
-{
-	int err;
-
-	vxlan_ifs = kzalloc(VXLAN_IF_HASH_BUCKETS * sizeof(struct hlist_head),
-			    GFP_KERNEL);
-	if (!vxlan_ifs) {
-		err = -ENOMEM;
-		goto out;
+						parms->options, &vxlan_port);
+	if (err) {
+		vxlan_tunnel_release(vxlan_port);
+		return ERR_PTR(err);
 	}
 
-	vxlan_ports = kzalloc(VXLAN_SOCK_HASH_BUCKETS * sizeof(struct hlist_head),
-				GFP_KERNEL);
-	if (!vxlan_ports) {
-		err = -ENOMEM;
-		goto free_ifs;
+	vport = ovs_tnl_create(parms, &ovs_vxlan_vport_ops, &ovs_vxlan_tnl_ops);
+
+	if (!vport) {
+		vxlan_tunnel_release(vxlan_port);
 	}
 
-out:
-	return 0;
-free_ifs:
-	kfree(vxlan_ifs);
-	goto out;
-}
-
-static void vxlan_exit(void)
-{
-	kfree(vxlan_ports);
-	kfree(vxlan_ifs);
+	return vport;
 }
 
 const struct vport_ops ovs_vxlan_vport_ops = {
 	.type		= OVS_VPORT_TYPE_VXLAN,
 	.flags		= VPORT_F_TUN_ID,
-	.init		= vxlan_init,
-	.exit		= vxlan_exit,
 	.create		= vxlan_tnl_create,
 	.destroy	= vxlan_tnl_destroy,
 	.set_addr	= ovs_tnl_set_addr,

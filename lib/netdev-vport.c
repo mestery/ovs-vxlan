@@ -49,6 +49,9 @@
 
 VLOG_DEFINE_THIS_MODULE(netdev_vport);
 
+/* Default to the OTV port, per the VXLAN IETF draft. */
+#define VXLAN_DST_PORT 8472
+
 struct netdev_dev_vport {
     struct netdev_dev netdev_dev;
     struct ofpbuf *options;
@@ -174,10 +177,6 @@ netdev_vport_get_netdev_type(const struct dpif_linux_vport *vport)
         return "capwap";
 
     case OVS_VPORT_TYPE_VXLAN:
-        if (tnl_port_config_from_nlattr(vport->options, vport->options_len,
-                                        a)) {
-            break;
-        }
         return ("vxlan");
 
     case OVS_VPORT_TYPE_FT_GRE:
@@ -591,8 +590,9 @@ parse_tunnel_config(const char *name, const char *type,
                     const struct smap *args, struct ofpbuf *options)
 {
     bool is_gre = false;
-    bool is_vxlan = false;
     bool is_ipsec = false;
+    bool needs_dst_port = false;
+    bool found_dst_port = false;
     struct smap_node *node;
     bool ipsec_mech_set = false;
     ovs_be32 daddr = htonl(0);
@@ -611,7 +611,7 @@ parse_tunnel_config(const char *name, const char *type,
         is_ipsec = true;
         flags |= TNL_F_IPSEC;
     } else if (!strcmp(type, "vxlan")) {
-        is_vxlan = true;
+        needs_dst_port = true;
     }
 
     SMAP_FOR_EACH (node, args) {
@@ -648,8 +648,10 @@ parse_tunnel_config(const char *name, const char *type,
             } else {
                 nl_msg_put_u8(options, OVS_TUNNEL_ATTR_TTL, atoi(node->value));
             }
-        } else if (!strcmp(node->key, "dst_port") && is_vxlan) {
-            nl_msg_put_u16(options, OVS_TUNNEL_ATTR_DST_PORT, atoi(node->value));
+        } else if (!strcmp(node->key, "dst_port") && needs_dst_port) {
+            nl_msg_put_u16(options, OVS_TUNNEL_ATTR_DST_PORT,
+                           atoi(node->value));
+            found_dst_port = true;
         } else if (!strcmp(node->key, "csum") && is_gre) {
             if (!strcmp(node->value, "true")) {
                 flags |= TNL_F_CSUM;
@@ -704,6 +706,11 @@ parse_tunnel_config(const char *name, const char *type,
         } else {
             VLOG_WARN("%s: unknown %s argument '%s'", name, type, node->key);
         }
+    }
+
+    /* Add a default destination port for VXLAN if none specified. */
+    if (needs_dst_port && !found_dst_port) {
+        nl_msg_put_u16(options, OVS_TUNNEL_ATTR_DST_PORT, VXLAN_DST_PORT);
     }
 
     if (is_ipsec) {
@@ -849,7 +856,7 @@ unparse_tunnel_config(const char *name OVS_UNUSED, const char *type OVS_UNUSED,
     }
 
     if (a[OVS_TUNNEL_ATTR_DST_PORT]) {
-        ovs_be16 dst_port = nl_attr_get_be16(a[OVS_TUNNEL_ATTR_DST_PORT]);
+        uint16_t dst_port = nl_attr_get_u16(a[OVS_TUNNEL_ATTR_DST_PORT]);
         smap_add_format(args, "dst_port", "%d", dst_port);
     }
 

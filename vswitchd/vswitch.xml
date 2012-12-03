@@ -1259,7 +1259,7 @@
 	      As an experimental protocol, VXLAN has no officially assigned UDP
 	      port.  Open vSwitch currently uses UDP destination port 8472.
 	      The source port used for VXLAN traffic varies on a per-flow basis
-	      between 32768 and 65535 to allow load balancing.
+	      and is in the ephemeral port range.
 	    </p>
           </dd>
 
@@ -1412,13 +1412,6 @@
         deprecated and will be removed soon.
       </column>
 
-      <group title="Tunnel Options: gre and vxlan only">
-        <p>
-          Only <code>gre</code> and <code>vxlan</code> interfaces support these
-          options.
-        </p>
-      </group>
-
       <group title="Tunnel Options: gre and ipsec_gre only">
         <p>
           Only <code>gre</code> and <code>ipsec_gre</code> interfaces support
@@ -1447,18 +1440,10 @@
         </column>
       </group>
 
-      <group title="Tunnel Options: ipsec_gre and ipsec_vxlan only">
+      <group title="Tunnel Options: ipsec_gre only">
         <p>
-          Only <code>ipsec_gre</code> and <code>ipsec_vxlan</code> interfaces
-          support these options.
+          Only <code>ipsec_gre</code> interfaces support these options.
         </p>
-
-	<p>
-	  These options are implemented through a separate daemon named
-	  <code>ovs-monitor-ipsec</code> that so far has only been ported to
-	  and packaged for Debian (including derivative distributions such as
-	  Ubuntu).
-	</p>
 
         <column name="options" key="peer_cert">
           Required for certificate authentication.  A string containing the

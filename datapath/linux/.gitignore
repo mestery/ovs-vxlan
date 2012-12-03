@@ -23,7 +23,6 @@
 /kmemdup.c
 /loop_counter.c
 /modules.order
-/net_namespace.c
 /netdevice.c
 /net_namespace.c
 /random32.c
