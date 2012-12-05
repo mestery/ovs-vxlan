@@ -49,7 +49,7 @@ output_from_openflow10(const struct ofp10_action_output *oao,
 }
 
 static enum ofperr
-enqueue_from_openflow10(const struct ofp_action_enqueue *oae,
+enqueue_from_openflow10(const struct ofp10_action_enqueue *oae,
                         struct ofpbuf *out)
 {
     struct ofpact_enqueue *enqueue;
@@ -479,7 +479,7 @@ ofpact_from_openflow10(const union ofp_action *a, struct ofpbuf *out)
         break;
 
     case OFPUTIL_OFPAT10_ENQUEUE:
-        error = enqueue_from_openflow10((const struct ofp_action_enqueue *) a,
+        error = enqueue_from_openflow10((const struct ofp10_action_enqueue *) a,
                                         out);
         break;
 
@@ -718,7 +718,7 @@ ofpact_from_openflow11(const union ofp_action *a, struct ofpbuf *out)
         if (((const struct ofp11_action_push *)a)->ethertype !=
             htons(ETH_TYPE_VLAN_8021Q)) {
             /* TODO:XXX 802.1AD(QinQ) isn't supported at the moment */
-            return OFPERR_OFPET_BAD_ACTION;
+            return OFPERR_OFPBAC_BAD_ARGUMENT;
         }
         ofpact_put_PUSH_VLAN(out);
         break;
@@ -917,7 +917,9 @@ decode_openflow11_instructions(const struct ofp11_instruction insts[],
         }
 
         if (out[type]) {
-            return OFPERR_OFPIT_BAD_INSTRUCTION;
+            return OFPERR_OFPBAC_UNSUPPORTED_ORDER; /* No specific code for
+                                                     * a duplicate instruction
+                                                     * exist */
         }
         out[type] = inst;
     }
@@ -1157,7 +1159,6 @@ ofpacts_verify(const struct ofpact ofpacts[], size_t ofpacts_len)
         if (om) {
             if (a->type == OFPACT_WRITE_METADATA) {
                 VLOG_WARN("duplicate write_metadata instruction specified");
-                /* should be OFPERR_OFPET_BAD_ACTION? */
                 return OFPERR_OFPBAC_UNSUPPORTED_ORDER;
             } else {
                 VLOG_WARN("write_metadata instruction must be specified after "
@@ -1404,7 +1405,7 @@ static void
 ofpact_enqueue_to_openflow10(const struct ofpact_enqueue *enqueue,
                              struct ofpbuf *out)
 {
-    struct ofp_action_enqueue *oae;
+    struct ofp10_action_enqueue *oae;
 
     oae = ofputil_put_OFPAT10_ENQUEUE(out);
     oae->port = htons(enqueue->port);

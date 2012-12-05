@@ -133,6 +133,8 @@ struct ofservice {
     int burst_limit;            /* Limit on accumulating packet credits. */
     bool enable_async_msgs;     /* Initially enable async messages? */
     uint8_t dscp;               /* DSCP Value for controller connection */
+    uint32_t allowed_versions;  /* OpenFlow protocol versions that may
+                                 * be negotiated for a session. */
 };
 
 static void ofservice_reconfigure(struct ofservice *,
@@ -507,15 +509,36 @@ connmgr_set_controllers(struct connmgr *mgr,
         const struct ofproto_controller *c = &controllers[i];
 
         if (!vconn_verify_name(c->target)) {
-            if (!find_controller_by_target(mgr, c->target)) {
+            bool add = false;
+            ofconn = find_controller_by_target(mgr, c->target);
+            if (!ofconn) {
                 VLOG_INFO("%s: added primary controller \"%s\"",
                           mgr->name, c->target);
+                add = true;
+            } else if (rconn_get_allowed_versions(ofconn->rconn) !=
+                       allowed_versions) {
+                VLOG_INFO("%s: re-added primary controller \"%s\"",
+                          mgr->name, c->target);
+                add = true;
+                ofconn_destroy(ofconn);
+            }
+            if (add) {
                 add_controller(mgr, c->target, c->dscp, allowed_versions);
             }
         } else if (!pvconn_verify_name(c->target)) {
-            if (!ofservice_lookup(mgr, c->target)) {
+            bool add = false;
+            ofservice = ofservice_lookup(mgr, c->target);
+            if (!ofservice) {
                 VLOG_INFO("%s: added service controller \"%s\"",
                           mgr->name, c->target);
+                add = true;
+            } else if (ofservice->allowed_versions != allowed_versions) {
+                VLOG_INFO("%s: re-added service controller \"%s\"",
+                          mgr->name, c->target);
+                ofservice_destroy(mgr, ofservice);
+                add = true;
+            }
+            if (add) {
                 ofservice_create(mgr, c->target, allowed_versions, c->dscp);
             }
         } else {
@@ -953,29 +976,26 @@ void
 ofconn_send_error(const struct ofconn *ofconn,
                   const struct ofp_header *request, enum ofperr error)
 {
+    static struct vlog_rate_limit err_rl = VLOG_RATE_LIMIT_INIT(10, 10);
     struct ofpbuf *reply;
 
     reply = ofperr_encode_reply(error, request);
-    if (reply) {
-        static struct vlog_rate_limit err_rl = VLOG_RATE_LIMIT_INIT(10, 10);
+    if (!VLOG_DROP_INFO(&err_rl)) {
+        const char *type_name;
+        size_t request_len;
+        enum ofpraw raw;
 
-        if (!VLOG_DROP_INFO(&err_rl)) {
-            const char *type_name;
-            size_t request_len;
-            enum ofpraw raw;
+        request_len = ntohs(request->length);
+        type_name = (!ofpraw_decode_partial(&raw, request,
+                                            MIN(64, request_len))
+                     ? ofpraw_get_name(raw)
+                     : "invalid");
 
-            request_len = ntohs(request->length);
-            type_name = (!ofpraw_decode_partial(&raw, request,
-                                                MIN(64, request_len))
-                         ? ofpraw_get_name(raw)
-                         : "invalid");
-
-            VLOG_INFO("%s: sending %s error reply to %s message",
-                      rconn_get_name(ofconn->rconn), ofperr_to_string(error),
-                      type_name);
-        }
-        ofconn_send_reply(ofconn, reply);
+        VLOG_INFO("%s: sending %s error reply to %s message",
+                  rconn_get_name(ofconn->rconn), ofperr_to_string(error),
+                  type_name);
     }
+    ofconn_send_reply(ofconn, reply);
 }
 
 /* Same as pktbuf_retrieve(), using the pktbuf owned by 'ofconn'. */
@@ -1653,6 +1673,7 @@ ofservice_create(struct connmgr *mgr, const char *target,
     ofservice = xzalloc(sizeof *ofservice);
     hmap_insert(&mgr->services, &ofservice->node, hash_string(target, 0));
     ofservice->pvconn = pvconn;
+    ofservice->allowed_versions = allowed_versions;
 
     return 0;
 }
