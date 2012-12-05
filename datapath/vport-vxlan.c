@@ -70,7 +70,7 @@ struct if_name {
 /**
  * struct vxlan_port - Keeps track of open UDP ports
  * @list: list element.
- * @port: The UDP port number.
+ * @port: The UDP port number in network byte order.
  * @net: The net namespace this port is assosciated with.
  * @if_names: List of names this port is assosciated with.
  * @socket: The socket created for this port number.
@@ -79,41 +79,21 @@ struct if_name {
 struct vxlan_port {
 	struct list_head list;
 	u16 port;
-	struct net *net;
 	struct list_head if_names;
 	struct socket *vxlan_rcv_socket;
 	int count;
 };
 
-LIST_HEAD(vxlan_ports);
+static LIST_HEAD(vxlan_ports);
 
 static struct vxlan_port *vxlan_port_exists(struct net *net, u16 port)
 {
 	struct vxlan_port *vxlan_port;
 
 	list_for_each_entry(vxlan_port, &vxlan_ports, list) {
-		if (vxlan_port->port == port && vxlan_port->net == net)
+		if (vxlan_port->port == port &&
+			net_eq(sock_net(vxlan_port->vxlan_rcv_socket->sk), net))
 			return vxlan_port;
-	}
-
-	return NULL;
-}
-
-static struct vxlan_port *find_vxlan_port_by_name(struct net *net,
-						  const char *name)
-{
-	struct vxlan_port *vxlan_port;
-
-	list_for_each_entry(vxlan_port, &vxlan_ports, list) {
-		if (vxlan_port->net == net) {
-			struct if_name *if_name;
-
-			list_for_each_entry(if_name, &vxlan_port->if_names,
-					    list) {
-				if (!strcmp(if_name->name, name))
-					return vxlan_port;
-			}
-		}
 	}
 
 	return NULL;
@@ -153,7 +133,7 @@ static struct sk_buff *vxlan_build_header(const struct vport *vport,
 
 	tnl_get_param(mutable, tun_key, &flags, &out_key);
 
-	udph->dest = htons(mutable->dst_port);
+	udph->dest = mutable->dst_port;
 	udph->source = htons(get_src_port(skb));
 	udph->check = 0;
 	udph->len = htons(skb->len - skb_transport_offset(skb));
@@ -240,7 +220,7 @@ static int vxlan_socket_init(struct vxlan_port *vxlan_port, struct net *net)
 
 	sin.sin_family = AF_INET;
 	sin.sin_addr.s_addr = htonl(INADDR_ANY);
-	sin.sin_port = htons(vxlan_port->port);
+	sin.sin_port = vxlan_port->port;
 
 	err = kernel_bind(vxlan_port->vxlan_rcv_socket, (struct sockaddr *)&sin,
 			  sizeof(struct sockaddr_in));
@@ -309,7 +289,7 @@ static int vxlan_tunnel_setup(struct net *net, const char *name,
 	}
 
 	/* Verify if we already have a socket created for this port */
-	vxlan_port = vxlan_port_exists(net, dst_port);
+	vxlan_port = vxlan_port_exists(net, htons(dst_port));
 	if (vxlan_port) {
 		if_name = kzalloc(sizeof(struct if_name), GFP_KERNEL);
 		if (!if_name) {
@@ -337,8 +317,7 @@ static int vxlan_tunnel_setup(struct net *net, const char *name,
 		goto error;
 	}
 
-	vxlan_port->port = dst_port;
-	vxlan_port->net = net;
+	vxlan_port->port = htons(dst_port);
 	vxlan_port->count = 1;
 	strcpy(if_name->name, name);
 	INIT_LIST_HEAD(&vxlan_port->if_names);
@@ -377,11 +356,7 @@ static int vxlan_set_options(struct vport *vport, struct nlattr *options)
 
 	config = rtnl_dereference(tnl_vport->mutable);
 
-	old_port = find_vxlan_port_by_name(net, vname);
-	if (old_port && old_port->port == config->dst_port) {
-		/* Release old socket */
-		vxlan_tunnel_release(old_port);
-	}
+	old_port = vxlan_port_exists(net, htons(config->dst_port));
 
 	err = vxlan_tunnel_setup(net, vname, options, &vxlan_port);
 	if (err)
@@ -391,6 +366,12 @@ static int vxlan_set_options(struct vport *vport, struct nlattr *options)
 
 	if (err)
 		vxlan_tunnel_release(vxlan_port);
+	else {
+		if (old_port) {
+			/* Release old socket */
+			vxlan_tunnel_release(old_port);
+		}
+	}
 out:
 	return err;
 }
@@ -412,13 +393,10 @@ static void vxlan_tnl_destroy(struct vport *vport)
 	config = rtnl_dereference(tnl_vport->mutable);
 
 	vxlan_port = vxlan_port_exists(ovs_dp_get_net(vport->dp),
-					 config->dst_port);
-	if (!vxlan_port)
-		goto out;
+					 htons(config->dst_port));
 
 	vxlan_tunnel_release(vxlan_port);
 
-out:
 	ovs_tnl_destroy(vport);
 }
 
@@ -430,16 +408,13 @@ static struct vport *vxlan_tnl_create(const struct vport_parms *parms)
 
 	err = vxlan_tunnel_setup(ovs_dp_get_net(parms->dp), parms->name,
 						parms->options, &vxlan_port);
-	if (err) {
-		vxlan_tunnel_release(vxlan_port);
+	if (err)
 		return ERR_PTR(err);
-	}
 
 	vport = ovs_tnl_create(parms, &ovs_vxlan_vport_ops, &ovs_vxlan_tnl_ops);
 
-	if (!vport) {
+	if (!vport)
 		vxlan_tunnel_release(vxlan_port);
-	}
 
 	return vport;
 }
