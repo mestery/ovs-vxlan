@@ -19,6 +19,7 @@ openvswitch_sources = \
 	vport-capwap.c \
 	vport-gre.c \
 	vport-internal_dev.c \
+	vport-lisp.c \
 	vport-netdev.c \
 	vport-patch.c \
 	vport-vxlan.c

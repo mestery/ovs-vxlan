@@ -186,6 +186,9 @@ netdev_vport_get_netdev_type(const struct dpif_linux_vport *vport)
     case OVS_VPORT_TYPE_VXLAN:
         return "vxlan";
 
+    case OVS_VPORT_TYPE_LISP:
+        return "lisp";
+
     case OVS_VPORT_TYPE_FT_GRE:
     case __OVS_VPORT_TYPE_MAX:
         break;
@@ -915,6 +918,7 @@ netdev_vport_register(void)
         TUNNEL_CLASS("ipsec_gre64", OVS_VPORT_TYPE_GRE64),
         TUNNEL_CLASS("capwap", OVS_VPORT_TYPE_CAPWAP),
         TUNNEL_CLASS("vxlan", OVS_VPORT_TYPE_VXLAN),
+        TUNNEL_CLASS("lisp", OVS_VPORT_TYPE_LISP),
 
         { OVS_VPORT_TYPE_PATCH,
           { "patch", VPORT_FUNCTIONS(NULL, NULL) },
