@@ -1278,6 +1278,15 @@
 	    </p>
           </dd>
 
+          <dt><code>lisp</code></dt>
+          <dd>
+            A layer 3 tunnel over the experimental, UDP-based LISP
+            protocol described at
+            <code>http://tools.ietf.org/html/draft-ietf-lisp-24</code>.
+            LISP is currently supported only with the Linux kernel datapath
+            with kernel version 2.6.26 or later.
+          </dd>
+
           <dt><code>patch</code></dt>
           <dd>
             A pair of virtual devices that act as a patch cable.

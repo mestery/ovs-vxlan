@@ -43,6 +43,7 @@
 #define TNL_T_PROTO_GRE64	1
 #define TNL_T_PROTO_CAPWAP	2
 #define TNL_T_PROTO_VXLAN	3
+#define TNL_T_PROTO_LISP	4
 
 /* These flags are only needed when calling tnl_find_port(). */
 #define TNL_T_KEY_EXACT		(1 << 10)
